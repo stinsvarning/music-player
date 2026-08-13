@@ -1,0 +1,19 @@
+{
+  "name": "music-player-engine",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "bgutils-js": "^3.2.0",
+    "happy-dom": "^20.0.0",
+    "undici": "^8.10.0",
+    "youtubei.js": "^17.2.0"
+  }
+}

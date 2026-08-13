@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Music
+Comment=YouTube Music player (Innertube + mpv)
+Exec=/usr/bin/python3 /home/llurd/Projects/music-player/music-player
+Icon=audio-x-generic
+Terminal=false
+Categories=AudioVideo;Audio;Player;
+StartupWMClass=stream.music.Player
