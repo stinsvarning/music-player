@@ -38,7 +38,12 @@ class PackagingPathsTests(unittest.TestCase):
         self.assertIn("--purge-extras", uninstall)
         install = (ROOT / "packaging" / "install.sh").read_text()
         self.assertIn("uninstall.sh", install)
-        self.assertNotIn("<this-repo>", (ROOT / "README.md").read_text())
+        readme = (ROOT / "README.md").read_text()
+        self.assertNotIn("<this-repo>", readme)
+        self.assertNotIn("After you publish", readme)
+        self.assertNotIn("cliamp", readme.lower())
+        self.assertIn("github.com/stinsvarning/music-player", readme)
+        self.assertFalse((ROOT / "docs/superpowers").exists())
 
     def test_engine_entry_is_beside_the_ui_tree(self):
         entry = Path(engine_entry())
