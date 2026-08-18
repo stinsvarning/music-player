@@ -1,3 +1,4 @@
+import { itemLooksUnplayable } from "./playable.js";
 import { textOf } from "./text.js";
 
 export function songRadioId(videoId) {
@@ -30,6 +31,7 @@ export function panelSongs(panel, limit = 50) {
       artist: textOf(video.artists?.[0]?.name) || textOf(video.author) || "",
       album: textOf(video.album?.name) || "",
       duration_secs: video.duration?.seconds || 0,
+      playable: !itemLooksUnplayable(video),
     });
   }
   return songs;
@@ -66,6 +68,7 @@ export function extractSongs(nodes, out = []) {
           artist: textOf(it.artists?.[0]?.name) || textOf(it.author?.name) || textOf(it.author) || "",
           album: textOf(it.album?.name) || textOf(it.album) || "",
           duration_secs: it.duration?.seconds || parseCount(it.duration) || 0,
+          playable: !itemLooksUnplayable(it),
         });
       }
       if (it.contents) {

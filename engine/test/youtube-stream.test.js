@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Youtube } from "../src/youtube.js";
+import { isUnplayableError } from "../src/playable.js";
 
 function fakeSession(getInfo) {
   const yt = new Youtube();
@@ -77,4 +78,14 @@ test("streamUrl fails after retries still have no audio", async () => {
   });
   await assert.rejects(() => yt.streamUrl("abc"), /no audio format/);
   assert.equal(calls, 3);
+});
+
+test("streamUrl does not retry a playability block", async () => {
+  let calls = 0;
+  const yt = fakeSession(async () => {
+    calls += 1;
+    return { playability_status: { status: "UNPLAYABLE", reason: "error 150" }, streaming_data: { adaptive_formats: [], formats: [] } };
+  });
+  await assert.rejects(() => yt.streamUrl("abc"), (err) => isUnplayableError(err));
+  assert.equal(calls, 1);
 });

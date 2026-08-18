@@ -3,6 +3,7 @@ import { UrlCache } from "./cache.js";
 import { PRESETS, dbToUnit, lavfiEqualizer, parseAmetadataLog, spectrumBandFile } from "./eq.js";
 import fs from "node:fs";
 import { spectrumDir } from "./paths.js";
+import { isUnplayableError, unplayableError } from "./playable.js";
 import { parseSession } from "./session.js";
 
 export class Player {
@@ -28,6 +29,7 @@ export class Player {
     this.state = "stopped";
     this._ignoreEof = false;
     this._advancing = false;
+    this._skipDepth = 0;
     this.readBands = typeof readBands === "function" ? readBands : null;
     this._sleep = delay;
     this._bands = Array(10).fill(0);
@@ -232,7 +234,14 @@ export class Player {
     }
     if (this.repeat === "one") {
       this.position = 0;
-      await this.#loadCurrent({ keepPosition: true });
+      try {
+        await this.#loadCurrent({ keepPosition: true });
+      } catch (err) {
+        if (isUnplayableError(err)) {
+          await this.#stopAtEnd();
+        }
+        throw err;
+      }
       this.#saveSession();
       return;
     }
@@ -256,7 +265,25 @@ export class Player {
       return;
     }
     this.position = 0;
-    await this.#loadCurrent({ keepPosition: true });
+    try {
+      await this.#loadCurrent({ keepPosition: true });
+    } catch (err) {
+      if (!isUnplayableError(err)) {
+        throw err;
+      }
+      this._skipDepth = (this._skipDepth || 0) + 1;
+      if (this._skipDepth > this.queue.length) {
+        this._skipDepth = 0;
+        await this.#stopAtEnd();
+        throw unplayableError("no playable tracks in the queue");
+      }
+      try {
+        await this.next();
+      } finally {
+        this._skipDepth = Math.max(0, (this._skipDepth || 1) - 1);
+      }
+      return;
+    }
     this.#saveSession();
   }
 
@@ -676,6 +703,11 @@ export class Player {
       await this.#resumeSeek(this.position);
       await this.mpv.pause(false);
       this.prefetchNext();
+    } catch (err) {
+      if (isUnplayableError(err) && this.queue[this.index]) {
+        this.queue[this.index].playable = false;
+      }
+      throw err;
     } finally {
       setTimeout(() => {
         this._ignoreEof = false;
@@ -790,5 +822,6 @@ function normalize(track) {
     album: track.album || "",
     duration_secs: Number(track.duration_secs || 0),
     path: track.path || `https://music.youtube.com/watch?v=${track.id}`,
+    playable: track.playable !== false,
   };
 }

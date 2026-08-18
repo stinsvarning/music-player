@@ -87,6 +87,8 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         self._lyrics_token = 0
         self._lyric_lines: list[dict] = []
         self._playlists_token = 0
+        self._notice = ""
+        self._notice_until = 0.0
 
         Gtk.StyleContext.add_provider_for_display(
             Gdk.Display.get_default(),
@@ -616,6 +618,10 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
             else:
                 self.track_title.set_text("Nothing playing")
                 self.track_meta.set_text("YouTube Music")
+            if self._notice and time.monotonic() < self._notice_until:
+                self.track_meta.set_text(self._notice)
+            else:
+                self._notice = ""
             self.pos_label.set_text(format_time(st.position) if self._seek.follow_status() else format_time(self.seek.get_value()))
             self.dur_label.set_text(format_time(st.duration))
             self.seek.set_range(0, max(st.duration, 1))
@@ -786,7 +792,11 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         self._queue_cmd({"cmd": "eq", "band": idx, "value": scale.get_value()})
 
     def _on_queue_activate(self, _l, row: Gtk.ListBoxRow) -> None:
-        self._queue_cmd({"cmd": "queue.play", "index": row.get_index()})
+        idx = row.get_index()
+        if 0 <= idx < len(self._queue) and not self._queue[idx].playable:
+            self._show_notice("Can't play here — YouTube-only")
+            return
+        self._queue_cmd({"cmd": "queue.play", "index": idx})
 
     def _render_queue(self, tracks: list[Track], index: int) -> None:
         old_ids = [t.id for t in self._queue]
@@ -803,6 +813,8 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         self._clear(self.queue_list)
         for i, track in enumerate(tracks, start=1):
             row = self._row(f"{i:02d}  {track.title}", track.artist, format_time(track.duration_secs))
+            if not track.playable:
+                row.add_css_class("unplayable")
             if i - 1 == index:
                 row.add_css_class("current-track")
             self._bind_song_menu(row, track, source="queue")
@@ -829,6 +841,10 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
                     row.add_css_class("current-track")
                 else:
                     row.remove_css_class("current-track")
+                if i < len(self._queue) and not self._queue[i].playable:
+                    row.add_css_class("unplayable")
+                else:
+                    row.remove_css_class("unplayable")
                 i += 1
             row = row.get_next_sibling()
 
@@ -1072,11 +1088,21 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         self._render_queue(self._queue, current)
         return True
 
+    def _show_notice(self, text: str, seconds: float = 6.0) -> None:
+        self._notice = (text or "").strip()
+        self._notice_until = time.monotonic() + max(1.0, seconds)
+        if self._notice:
+            self.track_meta.set_text(self._notice)
+
     def _set_footer(self, text: str) -> None:
         if text and is_login_error(text):
             self._show_login(text)
             return
-        if text and any(token in text.lower() for token in ("error", "fail", "died", "cookie")):
+        low = (text or "").lower()
+        if text and ("can't play" in low or "unplayable" in low):
+            self._show_notice("Can't play here — YouTube-only")
+            return
+        if text and any(token in low for token in ("error", "fail", "died", "cookie")):
             self.set_title(text)
 
     def _show_lyrics(self, lines: list[dict], *, found: bool) -> None:

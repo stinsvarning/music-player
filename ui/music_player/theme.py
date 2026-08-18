@@ -412,6 +412,10 @@ def css_for(palette: Palette) -> str:
             background: {select};
             color: {palette.fg};
         }}
+        row.unplayable, row.unplayable label {{
+            color: {palette.muted};
+            opacity: 0.5;
+        }}
         .current-track {{
             background: {palette.highlight};
             color: {palette.accent};

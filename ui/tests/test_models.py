@@ -14,6 +14,7 @@ from music_player.models import (
     page_done,
     parse_playlists,
     parse_status,
+    parse_track,
     song_menu_actions,
     tracks_caption,
 )
@@ -154,6 +155,10 @@ class StatusParseTests(unittest.TestCase):
         self.assertFalse(st.automix)
         self.assertTrue(st.logged_in)
         self.assertEqual(st.auth_source, "firefox:~/.config/zen")
+
+    def test_parse_track_keeps_playable_flag(self):
+        self.assertTrue(parse_track({"id": "a", "title": "ok"}).playable)
+        self.assertFalse(parse_track({"id": "b", "title": "no", "playable": False}).playable)
 
     def test_playlists(self):
         lists = parse_playlists(

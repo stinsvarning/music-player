@@ -114,6 +114,8 @@ class LibraryMixin:
     def _append_track_rows(self, tracks, start: int) -> None:
         for i, track in enumerate(tracks, start=start):
             row = self._row(f"{i:02d}  {track.title}", track.artist, format_time(track.duration_secs))
+            if not track.playable:
+                row.add_css_class("unplayable")
             self._bind_song_menu(row, track, source="library")
             self.track_list.append(row)
 
@@ -131,6 +133,9 @@ class LibraryMixin:
         if idx >= len(tracks):
             return
         track = tracks[idx]
+        if not track.playable:
+            self._show_notice("Can't play here — YouTube-only")
+            return
         self.notebook.set_current_page(0)
         self._queue_cmd({"cmd": "track.play", "track": track.to_ipc()}, timeout=40)
 

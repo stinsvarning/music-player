@@ -15,6 +15,7 @@ Platform.shim.eval = async (data) => {
 };
 import { LOGIN_REQUIRED } from "./cookies.js";
 import { pickAudioFormat } from "./formats.js";
+import { infoLooksUnplayable, isUnplayableError, unplayableError } from "./playable.js";
 import { saveQueue } from "./save-queue.js";
 import { continuePlaylistCollection, startPlaylistCollection } from "./library.js";
 import {
@@ -317,8 +318,15 @@ export class Youtube {
       try {
         info = await this.yt.music.getInfo(id);
       } catch (err) {
+        if (isUnplayableError(err)) {
+          throw err;
+        }
         lastError = err;
         continue;
+      }
+      const blocked = infoLooksUnplayable(info);
+      if (blocked) {
+        throw unplayableError(blocked);
       }
       const formats = [
         ...(info.streaming_data?.adaptive_formats || []),

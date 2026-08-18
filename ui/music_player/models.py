@@ -61,6 +61,7 @@ class Track:
     album: str = ""
     duration_secs: int = 0
     path: str = ""
+    playable: bool = True
 
     def to_ipc(self) -> dict[str, Any]:
         return {
@@ -70,6 +71,7 @@ class Track:
             "album": self.album,
             "duration_secs": self.duration_secs,
             "path": self.path,
+            "playable": self.playable,
         }
 
 
@@ -211,6 +213,7 @@ def parse_track(obj: dict[str, Any] | None) -> Track | None:
         album=_plain(obj.get("album")),
         duration_secs=int(obj.get("duration_secs") or 0),
         path=path,
+        playable=obj.get("playable") is not False,
     )
 
 

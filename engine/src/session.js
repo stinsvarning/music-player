@@ -80,6 +80,7 @@ function storedTrack(track) {
     artist: String(track.artist || ""),
     album: String(track.album || ""),
     duration_secs: Number(track.duration_secs) || 0,
+    playable: track.playable !== false,
   };
 }
 

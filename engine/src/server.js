@@ -2,6 +2,7 @@ import fs from "node:fs";
 import net from "node:net";
 import { commandCatalog } from "./commands.js";
 import { attachId, encode, fail, ok, parseRequest } from "./protocol.js";
+import { isUnplayableError } from "./playable.js";
 import { pingEngine } from "./singleton.js";
 
 function createIpcServer(handler) {
@@ -191,7 +192,23 @@ export async function dispatch(player, youtube, req) {
       const tracks = await youtube.playlistTracks(req.id);
       player.replaceQueue(tracks, req.index || 0);
       if (tracks.length) {
-        await player.playIndex(player.index);
+        try {
+          await player.playIndex(player.index);
+        } catch (err) {
+          if (!isUnplayableError(err)) {
+            throw err;
+          }
+          try {
+            await player.next();
+          } catch (skipErr) {
+            if (!isUnplayableError(skipErr)) {
+              throw skipErr;
+            }
+          }
+          if (player.state !== "playing") {
+            return fail(err.message);
+          }
+        }
       }
       return ok({ total: tracks.length });
     }

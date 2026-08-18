@@ -83,6 +83,7 @@ class OmarchyPaletteTests(unittest.TestCase):
         self.assertIn("button.eq-preset", css)
         self.assertIn(".tab-page", css)
         self.assertNotIn("lyric-now", css)
+        self.assertIn("row.unplayable", css)
 
 
 if __name__ == "__main__":
