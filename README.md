@@ -6,6 +6,14 @@ A compact YouTube Music player for Arch: GTK4 window, Innertube engine, mpv for 
 
 Works on **Omarchy** and other Arch-family systems including **CachyOS**. The bar widget and Hyprland float rules are optional Omarchy extras.
 
+## Screenshots
+
+![Queue](docs/screenshots/queue.png)
+
+![Equalizer](docs/screenshots/equalizer.png)
+
+![Music](docs/screenshots/music.png)
+
 ## Needs
 
 - Node 22+ (`nodejs`, `npm`)
@@ -17,6 +25,23 @@ Premium quality is used when that browser session has it.
 
 ## Install (Arch / CachyOS)
 
+From the AUR, once the package is uploaded:
+
+```bash
+paru -S music-player-git
+# or: yay -S music-player-git
+```
+
+Until then, build the same PKGBUILD from this repo:
+
+```bash
+git clone https://github.com/stinsvarning/music-player.git
+cd music-player/packaging/aur
+makepkg -si
+```
+
+Or a user-local install without pacman:
+
 ```bash
 git clone https://github.com/stinsvarning/music-player.git
 cd music-player
@@ -24,7 +49,7 @@ sudo pacman -S --needed python-gobject gtk4 mpv nodejs npm
 ./packaging/install.sh --no-extras --prefix ~/.local
 ```
 
-That puts `music-player` on `PATH` (`~/.local/bin`) and a desktop entry named **Music**. Add `~/.local/bin` to `PATH` if your shell does not already.
+The script puts `music-player` on `PATH` (`~/.local/bin`) and a desktop entry named **Music**. Add `~/.local/bin` to `PATH` if your shell does not already. The AUR package installs to `/usr` instead.
 
 ## Install (Omarchy)
 
