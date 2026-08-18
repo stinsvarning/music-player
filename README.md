@@ -29,7 +29,7 @@ That puts `music-player` on `PATH` (`~/.local/bin`) and a desktop entry named **
 After you publish the repo:
 
 ```bash
-git clone https://github.com/YOURUSER/music-player.git
+git clone https://github.com/stinsvarning/music-player.git
 cd music-player
 sudo pacman -S --needed python-gobject gtk4 mpv nodejs npm
 ./packaging/install.sh --no-extras
