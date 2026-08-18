@@ -35,16 +35,14 @@ Set `MUSIC_PLAYER_HTTP=off` to leave the port closed. Override the port with `MU
 
 ## MCP
 
-Stdio MCP talks to the Unix socket (engine must already be running). Tools are the catalog minus `help` / `commands`. `shutdown` and `auth.refresh` stay hidden unless `MUSIC_PLAYER_MCP_DANGEROUS=1`.
+Any MCP client can attach over stdio. The process talks to the Unix socket, so the engine must already be running. Tools are the catalog minus `help` / `commands`. `shutdown` and `auth.refresh` stay hidden unless `MUSIC_PLAYER_MCP_DANGEROUS=1`.
 
-```toml
-# ~/.grok/config.toml
-[mcp_servers.music]
-command = "node"
-args = ["engine/bin/music-player-mcp"]
+```text
+command: node
+args: [engine/bin/music-player-mcp]
 ```
 
-From an install, point `args` at `~/.local/lib/music-player/engine/bin/music-player-mcp`. Tool names use underscores (`queue_save`, `track_play`).
+From an install, point `args` at `~/.local/lib/music-player/engine/bin/music-player-mcp`. Tool names use underscores (`queue_save`, `track_play`). How you register that command depends on the client.
 
 ## Tests
 
