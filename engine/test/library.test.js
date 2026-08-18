@@ -5,8 +5,82 @@ import {
   continuePlaylistCollection,
   dedupePlaylists,
   extractPlaylists,
+  deletePlaylistRequest,
+  playlistIsEditable,
+  renamePlaylistRequest,
   startPlaylistCollection,
 } from "../src/library.js";
+
+test("renamePlaylistRequest posts edit_playlist with playlistId", async () => {
+  const calls = [];
+  const result = await renamePlaylistRequest({
+    execute: async (endpoint, body) => {
+      calls.push([endpoint, body]);
+      return { success: true, status_code: 200 };
+    },
+    playlistId: "VLPL123",
+    name: "333",
+  });
+  assert.deepEqual(calls, [
+    [
+      "/browse/edit_playlist",
+      {
+        playlistId: "PL123",
+        actions: [{ action: "ACTION_SET_PLAYLIST_NAME", playlistName: "333" }],
+        client: "YTMUSIC",
+      },
+    ],
+  ]);
+  assert.deepEqual(result, { playlist_id: "PL123", name: "333" });
+});
+
+test("renamePlaylistRequest rejects a 400", async () => {
+  await assert.rejects(
+    () =>
+      renamePlaylistRequest({
+        execute: async () => ({ success: false, status_code: 400 }),
+        playlistId: "PL123",
+        name: "333",
+      }),
+    /could not rename/,
+  );
+});
+
+test("deletePlaylistRequest posts playlist/delete with playlistId", async () => {
+  const calls = [];
+  const result = await deletePlaylistRequest({
+    execute: async (endpoint, body) => {
+      calls.push([endpoint, body]);
+      return { success: true, status_code: 200 };
+    },
+    playlistId: "VLPL123",
+  });
+  assert.deepEqual(calls, [
+    ["/playlist/delete", { playlistId: "PL123", client: "YTMUSIC" }],
+  ]);
+  assert.deepEqual(result, { playlist_id: "PL123" });
+});
+
+test("deletePlaylistRequest rejects a 400", async () => {
+  await assert.rejects(
+    () =>
+      deletePlaylistRequest({
+        execute: async () => ({ success: false, status_code: 400 }),
+        playlistId: "PL123",
+      }),
+    /could not delete/,
+  );
+});
+
+test("playlistIsEditable is only true for user playlists", () => {
+  assert.equal(playlistIsEditable("PL123"), true);
+  assert.equal(playlistIsEditable("VLPL123"), true);
+  assert.equal(playlistIsEditable("LM"), false);
+  assert.equal(playlistIsEditable("VLLM"), false);
+  assert.equal(playlistIsEditable("RDAMPLPL123"), false);
+  assert.equal(playlistIsEditable("OLAK5uy_abc"), false);
+  assert.equal(playlistIsEditable(""), false);
+});
 
 test("extractPlaylists walks a grid and maps ids", () => {
   const found = extractPlaylists({

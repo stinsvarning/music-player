@@ -5,6 +5,10 @@ import { attachId, encode, fail, ok, parseRequest } from "./protocol.js";
 import { isUnplayableError } from "./playable.js";
 import { pingEngine } from "./singleton.js";
 
+function videoIdOf(req) {
+  return String(req?.id || req?.track?.id || "").trim();
+}
+
 function createIpcServer(handler) {
   return net.createServer((sock) => {
     let buf = "";
@@ -153,6 +157,41 @@ export async function dispatch(player, youtube, req) {
     case "queue.remove":
       player.removeAt(req.index);
       return ok({ tracks: player.queue, index: player.index, total: player.queue.length });
+    case "track.liked": {
+      const id = videoIdOf(req);
+      const result = await youtube.liked(id);
+      player.setRating?.(id, result.liked ? "like" : result.disliked ? "dislike" : "indifferent");
+      return ok(result);
+    }
+    case "track.like": {
+      const id = videoIdOf(req);
+      const result = await youtube.like(id);
+      player.setRating?.(id, "like");
+      return ok(result);
+    }
+    case "track.unlike": {
+      const id = videoIdOf(req);
+      const result = await youtube.unlike(id);
+      player.setRating?.(id, "indifferent");
+      return ok(result);
+    }
+    case "track.dislike": {
+      const id = videoIdOf(req);
+      const result = await youtube.dislike(id);
+      player.setRating?.(id, "dislike");
+      return ok(result);
+    }
+    case "playlist.rename": {
+      const result = await youtube.renamePlaylist(req.id, req.name);
+      return ok(result);
+    }
+    case "playlist.delete": {
+      const result = await youtube.deletePlaylist(req.id);
+      return ok(result);
+    }
+    case "playlist.mix":
+      await player.startPlaylistMix(req.id);
+      return ok({ total: player.queue.length, index: player.index });
     case "playlist.add":
       await youtube.addToPlaylist(req.playlist_id, req.video_id);
       return ok();

@@ -1,0 +1,12 @@
+[Icon Theme]
+Name=MusicPlayer
+Comment=Music player symbolic icons
+Directories=scalable/actions
+Hidden=true
+
+[scalable/actions]
+Context=Actions
+Size=16
+MinSize=8
+MaxSize=256
+Type=Scalable

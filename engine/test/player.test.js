@@ -505,6 +505,37 @@ test("startMix replaces the queue with radio tracks", async () => {
   assert.equal(player.state, "playing");
 });
 
+test("startPlaylistMix replaces the queue with playlist radio tracks", async () => {
+  const { player } = makePlayer();
+  player.youtube.mixPlaylist = async (id) => ({
+    tracks: [track("p1"), track("p2"), track(id)],
+    title: "Playlist Mix",
+  });
+  player.replaceQueue([track("old")], 0);
+  await player.startPlaylistMix("PL1");
+  assert.deepEqual(
+    player.queue.map((t) => t.id),
+    ["p1", "p2", "PL1"],
+  );
+  assert.equal(player.index, 0);
+  assert.equal(player.automix, true);
+  assert.equal(player.state, "playing");
+});
+
+test("setRating stamps liked and disliked on the matching queue row", () => {
+  const { player } = makePlayer();
+  player.replaceQueue([track("a"), track("b")], 1);
+  player.setRating("b", "like");
+  assert.equal(player.queue[1].liked, true);
+  assert.equal(player.queue[1].disliked, false);
+  player.setRating("b", "dislike");
+  assert.equal(player.queue[1].liked, false);
+  assert.equal(player.queue[1].disliked, true);
+  player.setRating("b", "indifferent");
+  assert.equal(player.queue[1].liked, false);
+  assert.equal(player.queue[1].disliked, false);
+});
+
 test("automix appends similar tracks when the queue ends", async () => {
   const { player } = makePlayer();
   player.replaceQueue([track("a"), track("b")], 1);

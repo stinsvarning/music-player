@@ -498,16 +498,47 @@ export class Player {
       throw new Error("mix is not available");
     }
     const mix = await this.youtube.mix(track.id);
+    await this.#applyMix(mix, track.id);
+  }
+
+  async startPlaylistMix(playlistId) {
+    const id = String(playlistId || "").trim();
+    if (!id) {
+      throw new Error("playlist id is required");
+    }
+    if (typeof this.youtube.mixPlaylist !== "function") {
+      throw new Error("mix is not available");
+    }
+    const mix = await this.youtube.mixPlaylist(id);
+    await this.#applyMix(mix);
+  }
+
+  async #applyMix(mix, seedId = "") {
     const tracks = (mix?.tracks || []).map(normalize).filter((t) => t.id);
     if (!tracks.length) {
       throw new Error("mix returned no tracks");
     }
-    const seed = tracks.findIndex((t) => t.id === track.id);
+    const seed = seedId ? tracks.findIndex((t) => t.id === seedId) : 0;
     this.queue = tracks;
     this.index = seed >= 0 ? seed : 0;
     this.automix = true;
     await this.#loadCurrent();
     this.#saveSession();
+  }
+
+  setRating(id, rating) {
+    const want = String(id || "").trim();
+    if (!want) {
+      return;
+    }
+    const liked = rating === "like";
+    const disliked = rating === "dislike";
+    for (const track of this.queue) {
+      if (track.id === want) {
+        track.liked = liked;
+        track.disliked = disliked;
+      }
+    }
   }
 
   setRepeat(name) {
@@ -595,6 +626,8 @@ export class Player {
       sleep_minutes: this.sleepMinutes,
       eq_preset: this.eqPreset,
       eq_bands: [...this.eqBands],
+      liked: track?.liked === true ? true : track?.liked === false ? false : null,
+      disliked: track?.disliked === true ? true : track?.disliked === false ? false : null,
       queue_sig: `${this.index}:${this.queue.map((t) => t.id).join(",")}`,
       logged_in: Boolean(this.youtube?.loggedIn),
       auth_source: this.youtube?.authSource || "",
@@ -703,6 +736,7 @@ export class Player {
       await this.#resumeSeek(this.position);
       await this.mpv.pause(false);
       this.prefetchNext();
+      this.#refreshRating(track.id);
     } catch (err) {
       if (isUnplayableError(err) && this.queue[this.index]) {
         this.queue[this.index].playable = false;
@@ -712,6 +746,27 @@ export class Player {
       setTimeout(() => {
         this._ignoreEof = false;
       }, 400);
+    }
+  }
+
+  #refreshRating(id) {
+    const want = String(id || "").trim();
+    if (!want || typeof this.youtube?.liked !== "function") {
+      return;
+    }
+    const apply = (result) => {
+      if (!result || this.queue[this.index]?.id !== want) {
+        return;
+      }
+      this.setRating(want, result.liked ? "like" : result.disliked ? "dislike" : "indifferent");
+    };
+    this.youtube.liked(want).then(apply).catch(() => {});
+    if (typeof this.youtube.whenLikedIds === "function") {
+      this.youtube
+        .whenLikedIds()
+        .then(() => this.youtube.liked(want))
+        .then(apply)
+        .catch(() => {});
     }
   }
 

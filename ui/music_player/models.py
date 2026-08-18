@@ -62,6 +62,8 @@ class Track:
     duration_secs: int = 0
     path: str = ""
     playable: bool = True
+    liked: bool | None = None
+    disliked: bool | None = None
 
     def to_ipc(self) -> dict[str, Any]:
         return {
@@ -72,6 +74,8 @@ class Track:
             "duration_secs": self.duration_secs,
             "path": self.path,
             "playable": self.playable,
+            "liked": self.liked,
+            "disliked": self.disliked,
         }
 
 
@@ -100,6 +104,8 @@ class PlayerStatus:
     track: Track | None = None
     logged_in: bool = False
     auth_source: str = ""
+    liked: bool | None = None
+    disliked: bool | None = None
 
 
 class SeekGate:
@@ -168,6 +174,39 @@ def song_menu_actions(source: str) -> list[str]:
     return actions
 
 
+def playlist_edit_id(pid: str) -> str:
+    text = (pid or "").strip()
+    return text[2:] if text.startswith("VL") else text
+
+
+def playlist_is_editable(pid: str) -> bool:
+    edit = playlist_edit_id(pid)
+    if not edit or edit == "LM":
+        return False
+    if edit.startswith("RD") or edit.startswith("OLAK"):
+        return False
+    return edit.startswith("PL")
+
+
+def playlist_menu_actions(pid: str) -> list[str]:
+    actions = ["Start mix"]
+    if playlist_is_editable(pid):
+        actions.extend(["Rename…", "Delete…"])
+    return actions
+
+
+def should_apply_engine_rating(*, hold_until: float, now: float) -> bool:
+    return float(now) >= float(hold_until or 0.0)
+
+
+def _tri(value: Any) -> bool | None:
+    if value is True:
+        return True
+    if value is False:
+        return False
+    return None
+
+
 def format_time(seconds: float | int | None) -> str:
     if not seconds:
         return "0:00"
@@ -214,6 +253,8 @@ def parse_track(obj: dict[str, Any] | None) -> Track | None:
         duration_secs=int(obj.get("duration_secs") or 0),
         path=path,
         playable=obj.get("playable") is not False,
+        liked=_tri(obj.get("liked")),
+        disliked=_tri(obj.get("disliked")),
     )
 
 
@@ -272,6 +313,14 @@ def parse_status(payload: dict[str, Any]) -> PlayerStatus:
     bands = [float(x) for x in (payload.get("eq_bands") or [])[:10]]
     while len(bands) < 10:
         bands.append(0.0)
+    track = parse_track(payload.get("track"))
+    liked = _tri(payload["liked"]) if "liked" in payload else (track.liked if track else None)
+    disliked = _tri(payload["disliked"]) if "disliked" in payload else (track.disliked if track else None)
+    if track is not None:
+        if track.liked is None:
+            track.liked = liked
+        if track.disliked is None:
+            track.disliked = disliked
     return PlayerStatus(
         state=payload.get("state") or "stopped",
         position=float(payload.get("position") or 0.0),
@@ -286,9 +335,11 @@ def parse_status(payload: dict[str, Any]) -> PlayerStatus:
         sleep_minutes=int(payload.get("sleep_minutes") or 0),
         eq_preset=payload.get("eq_preset") or "Flat",
         eq_bands=bands,
-        track=parse_track(payload.get("track")),
+        track=track,
         logged_in=bool(payload.get("logged_in")),
         auth_source=str(payload.get("auth_source") or payload.get("source") or ""),
+        liked=liked,
+        disliked=disliked,
     )
 
 

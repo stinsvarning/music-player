@@ -99,3 +99,68 @@ test("commandCatalog is a copy", () => {
   a.pop();
   assert.equal(commandCatalog().length, COMMANDS.length);
 });
+
+test("track.like stamps the current queue row", async () => {
+  const player = {
+    queue: [{ id: "aaa", liked: false }],
+    index: 0,
+    setRating(id, rating) {
+      player.rated = { id, rating };
+      const track = player.queue.find((row) => row.id === id);
+      if (track) {
+        track.liked = rating === "like";
+        track.disliked = rating === "dislike";
+      }
+    },
+  };
+  const youtube = {
+    async like(id) {
+      youtube.likedId = id;
+      return { id, liked: true, disliked: false };
+    },
+  };
+  const resp = await dispatch(player, youtube, { cmd: "track.like", id: "aaa" });
+  assert.equal(resp.ok, true);
+  assert.equal(resp.liked, true);
+  assert.equal(youtube.likedId, "aaa");
+  assert.deepEqual(player.rated, { id: "aaa", rating: "like" });
+});
+
+test("playlist.rename and playlist.delete go to YouTube", async () => {
+  const calls = [];
+  const youtube = {
+    async renamePlaylist(id, name) {
+      calls.push(["rename", id, name]);
+      return { playlist_id: id, name };
+    },
+    async deletePlaylist(id) {
+      calls.push(["delete", id]);
+      return { playlist_id: id };
+    },
+  };
+  const renamed = await dispatch({}, youtube, { cmd: "playlist.rename", id: "VLPL1", name: "Night" });
+  const deleted = await dispatch({}, youtube, { cmd: "playlist.delete", id: "PL1" });
+  assert.equal(renamed.ok, true);
+  assert.equal(renamed.name, "Night");
+  assert.equal(deleted.ok, true);
+  assert.deepEqual(calls, [
+    ["rename", "VLPL1", "Night"],
+    ["delete", "PL1"],
+  ]);
+});
+
+test("playlist.mix starts a playlist radio", async () => {
+  const player = {
+    queue: [],
+    index: -1,
+    async startPlaylistMix(id) {
+      player.mixed = id;
+      player.queue = [{ id: "a" }, { id: "b" }];
+      player.index = 0;
+    },
+  };
+  const resp = await dispatch(player, {}, { cmd: "playlist.mix", id: "PL1" });
+  assert.equal(resp.ok, true);
+  assert.equal(player.mixed, "PL1");
+  assert.equal(resp.total, 2);
+});

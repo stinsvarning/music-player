@@ -1,4 +1,53 @@
-import { textOf } from "./text.js";
+import { playlistEditId, textOf } from "./text.js";
+
+export function playlistIsEditable(id) {
+  const edit = playlistEditId(id);
+  if (!edit || edit === "LM") {
+    return false;
+  }
+  if (edit.startsWith("RD") || edit.startsWith("OLAK")) {
+    return false;
+  }
+  return edit.startsWith("PL");
+}
+
+export async function renamePlaylistRequest({ execute, playlistId, name }) {
+  const id = playlistEditId(playlistId);
+  const title = String(name || "").trim();
+  if (!id || !title) {
+    throw new Error("playlist id and name are required");
+  }
+  if (typeof execute !== "function") {
+    throw new Error("playlist rename is not available");
+  }
+  const resp = await execute("/browse/edit_playlist", {
+    playlistId: id,
+    actions: [{ action: "ACTION_SET_PLAYLIST_NAME", playlistName: title }],
+    client: "YTMUSIC",
+  });
+  if (resp && resp.success === false) {
+    throw new Error("could not rename this playlist");
+  }
+  return { playlist_id: id, name: title };
+}
+
+export async function deletePlaylistRequest({ execute, playlistId }) {
+  const id = playlistEditId(playlistId);
+  if (!id) {
+    throw new Error("playlist id is required");
+  }
+  if (typeof execute !== "function") {
+    throw new Error("playlist delete is not available");
+  }
+  const resp = await execute("/playlist/delete", {
+    playlistId: id,
+    client: "YTMUSIC",
+  });
+  if (resp && resp.success === false) {
+    throw new Error("could not delete this playlist");
+  }
+  return { playlist_id: id };
+}
 
 function parseCount(text) {
   if (!text) {

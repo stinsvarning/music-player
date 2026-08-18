@@ -7,6 +7,7 @@ import {
   continueTrackCollection,
   extractSongs,
   panelSongs,
+  playlistRadioId,
   songRadioId,
   startSearchCollection,
   startTrackCollection,
@@ -18,6 +19,14 @@ test("songRadioId builds a YouTube Music radio playlist id", () => {
   assert.equal(songRadioId("4neXNZyChkY"), "RDAMVM4neXNZyChkY");
   assert.equal(songRadioId("RDAMVMabc"), "RDAMVMabc");
   assert.equal(songRadioId(""), "");
+});
+
+test("playlistRadioId builds a YouTube Music playlist radio id", () => {
+  assert.equal(playlistRadioId("VLPL123"), "RDAMPLPL123");
+  assert.equal(playlistRadioId("PL123"), "RDAMPLPL123");
+  assert.equal(playlistRadioId("RDAMPLPL123"), "RDAMPLPL123");
+  assert.equal(playlistRadioId("LM"), "RDAMPLLM");
+  assert.equal(playlistRadioId(""), "");
 });
 
 test("panelSongs reads PlaylistPanel videos and wrappers", () => {

@@ -389,6 +389,11 @@ def css_for(palette: Palette) -> str:
             color: {palette.accent};
             border-color: {palette.accent};
         }}
+        button.rate:checked {{
+            background: {palette.highlight};
+            color: {palette.accent};
+            border-color: {palette.accent};
+        }}
         scale {{
             background: transparent;
         }}

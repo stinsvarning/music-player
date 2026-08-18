@@ -15,6 +15,9 @@ from music_player.models import (
     parse_playlists,
     parse_status,
     parse_track,
+    playlist_is_editable,
+    playlist_menu_actions,
+    should_apply_engine_rating,
     song_menu_actions,
     tracks_caption,
 )
@@ -224,6 +227,40 @@ class SongMenuTests(unittest.TestCase):
             song_menu_actions("queue"),
             ["Start mix", "Save this track…", "Save entire queue…", "Remove"],
         )
+
+
+class PlaylistMenuTests(unittest.TestCase):
+    def test_user_playlists_can_be_renamed(self):
+        self.assertTrue(playlist_is_editable("PL123"))
+        self.assertTrue(playlist_is_editable("VLPL123"))
+        self.assertFalse(playlist_is_editable("LM"))
+        self.assertFalse(playlist_is_editable("VLLM"))
+        self.assertFalse(playlist_is_editable("RDAMPLPL123"))
+
+    def test_system_playlists_only_start_a_mix(self):
+        self.assertEqual(playlist_menu_actions("LM"), ["Start mix"])
+        self.assertEqual(
+            playlist_menu_actions("VLPL123"),
+            ["Start mix", "Rename…", "Delete…"],
+        )
+
+
+class StatusRatingTests(unittest.TestCase):
+    def test_parse_status_keeps_like_state(self):
+        status = parse_status({"ok": True, "liked": True, "disliked": False, "track": {"id": "a"}})
+        self.assertTrue(status.liked)
+        self.assertFalse(status.disliked)
+        self.assertTrue(status.track.liked)
+
+    def test_parse_status_unknown_rating_stays_unset(self):
+        status = parse_status({"ok": True, "track": {"id": "a"}})
+        self.assertIsNone(status.liked)
+        self.assertIsNone(status.disliked)
+
+    def test_engine_rating_is_ignored_while_a_click_is_in_flight(self):
+        self.assertFalse(should_apply_engine_rating(hold_until=10.0, now=9.5))
+        self.assertTrue(should_apply_engine_rating(hold_until=10.0, now=10.0))
+        self.assertTrue(should_apply_engine_rating(hold_until=0.0, now=1.0))
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 import { itemLooksUnplayable } from "./playable.js";
-import { textOf } from "./text.js";
+import { playlistEditId, textOf } from "./text.js";
 
 export function songRadioId(videoId) {
   const id = String(videoId || "").trim();
@@ -10,6 +10,17 @@ export function songRadioId(videoId) {
     return id;
   }
   return `RDAMVM${id}`;
+}
+
+export function playlistRadioId(playlistId) {
+  const id = playlistEditId(playlistId);
+  if (!id) {
+    return "";
+  }
+  if (id.startsWith("RD")) {
+    return id;
+  }
+  return `RDAMPL${id}`;
 }
 
 export function panelSongs(panel, limit = 50) {

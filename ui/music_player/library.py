@@ -2,11 +2,20 @@ from __future__ import annotations
 
 import gi
 
+gi.require_version("Gdk", "4.0")
 gi.require_version("Gtk", "4.0")
 
-from gi.repository import Gtk
+from gi.repository import Gdk, Gtk
 
-from .models import can_autoselect_playlist, format_time, page_done, parse_playlists, parse_tracks, tracks_caption
+from .models import (
+    can_autoselect_playlist,
+    format_time,
+    page_done,
+    parse_playlists,
+    parse_tracks,
+    playlist_menu_actions,
+    tracks_caption,
+)
 
 
 class LibraryMixin:
@@ -34,7 +43,7 @@ class LibraryMixin:
         first = not self._playlists
         self._playlists.extend(page)
         for plist in page:
-            self.playlist_list.append(self._row(plist.name, "ytmusic", str(plist.track_count or "")))
+            self.playlist_list.append(self._playlist_row(plist))
         if can_autoselect_playlist(first=first and bool(self._playlists), searching=self._is_searching()):
             row = self.playlist_list.get_row_at_index(0)
             if row:
@@ -51,6 +60,153 @@ class LibraryMixin:
             lambda: self.ipc.request({"cmd": "playlists.more"}, timeout=30),
             lambda more, more_err: self._got_playlists(token, more, more_err),
         )
+        return False
+
+    def _playlist_row(self, plist) -> Gtk.ListBoxRow:
+        row = self._row(plist.name, "ytmusic", str(plist.track_count or ""))
+        self._bind_playlist_menu(row, plist)
+        return row
+
+    def _selected_playlist_id(self) -> str:
+        row = self.playlist_list.get_selected_row()
+        if row is None or row.get_index() >= len(self._playlists):
+            return ""
+        return self._playlists[row.get_index()].id
+
+    def _reload_playlist_rows(self, *, select_id: str = "") -> None:
+        keep = select_id or self._selected_playlist_id()
+        self._clear(self.playlist_list)
+        select = None
+        for plist in self._playlists:
+            row = self._playlist_row(plist)
+            self.playlist_list.append(row)
+            if plist.id == keep:
+                select = row
+        if select is not None:
+            self.playlist_list.select_row(select)
+
+    def _bind_playlist_menu(self, row: Gtk.ListBoxRow, plist) -> None:
+        click = Gtk.GestureClick()
+        click.set_button(Gdk.BUTTON_SECONDARY)
+        click.connect("pressed", lambda g, *_a: self._show_playlist_menu(row, plist, g))
+        row.add_controller(click)
+
+    def _show_playlist_menu(self, row: Gtk.ListBoxRow, plist, gesture) -> None:
+        self._dismiss_menu()
+        pop = Gtk.Popover()
+        pop.set_has_arrow(False)
+        pop.add_css_class("ctx-menu")
+        self._fill_playlist_menu(pop, row, plist)
+        pop.set_parent(row)
+        pop.popup()
+        self._ctx_pop = pop
+        gesture.set_state(Gtk.EventSequenceState.CLAIMED)
+
+    def _fill_playlist_menu(self, pop: Gtk.Popover, row: Gtk.ListBoxRow, plist) -> None:
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
+
+        def run(fn) -> None:
+            self._dismiss_menu()
+            fn()
+
+        for label in playlist_menu_actions(plist.id):
+            if label == "Start mix":
+                box.append(self._menu_button(label, lambda: run(lambda: self._start_playlist_mix(plist))))
+            elif label == "Rename…":
+                box.append(self._menu_button(label, lambda: self._fill_rename_playlist(pop, row, plist)))
+            elif label == "Delete…":
+                box.append(self._menu_button(label, lambda: self._fill_delete_playlist(pop, row, plist)))
+        pop.set_child(box)
+
+    def _fill_rename_playlist(self, pop: Gtk.Popover, row: Gtk.ListBoxRow, plist) -> None:
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        box.set_margin_start(10)
+        box.set_margin_end(10)
+        box.set_margin_top(8)
+        box.set_margin_bottom(8)
+        box.append(self._menu_button("← Back", lambda: self._fill_playlist_menu(pop, row, plist)))
+        lab = Gtk.Label(label="Rename playlist", xalign=0)
+        lab.add_css_class("meta")
+        entry = Gtk.Entry()
+        entry.set_text(plist.name)
+        entry.set_placeholder_text("playlist name")
+        save = Gtk.Button(label="Rename")
+        save.add_css_class("flat")
+
+        def rename_now(*_a) -> None:
+            name = entry.get_text().strip()
+            self._dismiss_menu()
+            if not name or name == plist.name:
+                return
+            self._rename_playlist(plist, name)
+
+        save.connect("clicked", rename_now)
+        entry.connect("activate", rename_now)
+        box.append(lab)
+        box.append(entry)
+        box.append(save)
+        pop.set_child(box)
+        entry.grab_focus()
+
+    def _fill_delete_playlist(self, pop: Gtk.Popover, row: Gtk.ListBoxRow, plist) -> None:
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        box.set_margin_start(10)
+        box.set_margin_end(10)
+        box.set_margin_top(8)
+        box.set_margin_bottom(8)
+        warn = Gtk.Label(label=f"Delete “{plist.name}” from YouTube Music?", xalign=0)
+        warn.add_css_class("meta")
+        warn.set_wrap(True)
+        box.append(warn)
+        box.append(self._menu_button("Cancel", lambda: self._fill_playlist_menu(pop, row, plist)))
+        box.append(self._menu_button("Delete", lambda: self._delete_playlist(plist)))
+        pop.set_child(box)
+
+    def _start_playlist_mix(self, plist) -> None:
+        self.notebook.set_current_page(0)
+        self._queue_cmd({"cmd": "playlist.mix", "id": plist.id}, timeout=40)
+
+    def _rename_playlist(self, plist, name: str) -> None:
+        self._async(
+            f"renaming {plist.name}…",
+            lambda: self.ipc.request({"cmd": "playlist.rename", "id": plist.id, "name": name}, timeout=20),
+            lambda payload, err: self._got_playlist_rename(plist, name, payload, err),
+        )
+
+    def _got_playlist_rename(self, plist, name: str, payload, err) -> bool:
+        if err:
+            self._set_footer(err)
+            self._show_notice(err)
+            return False
+        plist.name = name
+        selected = self._selected_playlist_id()
+        self._reload_playlist_rows(select_id=selected)
+        if selected == plist.id:
+            self.tracks_label.set_text(tracks_caption(playlist_name=name))
+        self._show_notice(f"Renamed to {name}")
+        return False
+
+    def _delete_playlist(self, plist) -> None:
+        self._dismiss_menu()
+        self._async(
+            f"deleting {plist.name}…",
+            lambda: self.ipc.request({"cmd": "playlist.delete", "id": plist.id}, timeout=20),
+            lambda payload, err: self._got_playlist_delete(plist, payload, err),
+        )
+
+    def _got_playlist_delete(self, plist, payload, err) -> bool:
+        if err:
+            self._set_footer(err)
+            self._show_notice(err)
+            return False
+        was_selected = self._selected_playlist_id() == plist.id
+        self._playlists = [row for row in self._playlists if row.id != plist.id]
+        self._reload_playlist_rows()
+        if was_selected:
+            self.browse.lib_tracks = []
+            self._render_tracks([])
+            self.tracks_label.set_text(tracks_caption())
+        self._show_notice(f"Deleted {plist.name}")
         return False
 
     def _on_playlist_selected(self, _l, row: Gtk.ListBoxRow | None) -> None:

@@ -17,13 +17,21 @@ import { LOGIN_REQUIRED } from "./cookies.js";
 import { pickAudioFormat } from "./formats.js";
 import { infoLooksUnplayable, isUnplayableError, unplayableError } from "./playable.js";
 import { saveQueue } from "./save-queue.js";
-import { continuePlaylistCollection, startPlaylistCollection } from "./library.js";
+import {
+  continuePlaylistCollection,
+  deletePlaylistRequest,
+  playlistIsEditable,
+  renamePlaylistRequest,
+  startPlaylistCollection,
+} from "./library.js";
+import { likeStatusFromInfo, mergeLikeStatus, rateTrack } from "./like.js";
 import {
   collectAllTracks,
   continueSearchCollection,
   continueTrackCollection,
   extractSongs,
   panelSongs,
+  playlistRadioId,
   songRadioId,
   startSearchCollection,
   startTrackCollection,
@@ -57,6 +65,9 @@ export class Youtube {
     this._trackSession = null;
     this._searchSession = null;
     this._cookie = "";
+    this._likeCache = new Map();
+    this._likedIds = null;
+    this._likedLoad = null;
   }
 
   disconnect() {
@@ -67,6 +78,9 @@ export class Youtube {
     this._playlistSession = null;
     this._trackSession = null;
     this._searchSession = null;
+    this._likeCache = new Map();
+    this._likedIds = null;
+    this._likedLoad = null;
   }
 
   #requireLogin() {
@@ -227,6 +241,145 @@ export class Youtube {
   async similar(videoId, { exclude = [] } = {}) {
     const mix = await this.mix(videoId);
     return uniqueAfter(mix.tracks, exclude);
+  }
+
+  async like(videoId) {
+    this.#requireLogin();
+    const result = await rateTrack({
+      execute: (endpoint, body) => this.yt.actions.execute(endpoint, body),
+      videoId,
+      liked: true,
+    });
+    this._likedIds?.add(result.id);
+    this._likeCache.set(result.id, result);
+    return result;
+  }
+
+  async unlike(videoId) {
+    this.#requireLogin();
+    const result = await rateTrack({
+      execute: (endpoint, body) => this.yt.actions.execute(endpoint, body),
+      videoId,
+      liked: false,
+    });
+    this._likedIds?.delete(result.id);
+    this._likeCache.set(result.id, result);
+    return result;
+  }
+
+  async dislike(videoId) {
+    this.#requireLogin();
+    const id = textOf(videoId);
+    if (!id) {
+      throw new Error("track id is required");
+    }
+    await this.yt.interact.dislike(id);
+    this._likedIds?.delete(id);
+    const result = { id, liked: false, disliked: true };
+    this._likeCache.set(id, result);
+    return result;
+  }
+
+  whenLikedIds() {
+    this.#ensureLikedIds();
+    return this._likedLoad || Promise.resolve();
+  }
+
+  async liked(videoId) {
+    this.#requireLogin();
+    const id = textOf(videoId);
+    if (!id) {
+      throw new Error("track id is required");
+    }
+    this.#ensureLikedIds();
+    if (this._likedIds?.has(id)) {
+      const result = { id, liked: true, disliked: false };
+      this._likeCache.set(id, result);
+      return result;
+    }
+    if (this._likeCache.has(id)) {
+      return { id, ...this._likeCache.get(id) };
+    }
+    let fromInfo = { liked: null, disliked: null };
+    try {
+      fromInfo = likeStatusFromInfo(await this.yt.music.getInfo(id));
+    } catch {
+      /* library membership is enough */
+    }
+    const merged = mergeLikeStatus(id, this._likedIds, fromInfo);
+    const result = {
+      id,
+      liked: merged.liked === true,
+      disliked: merged.disliked === true,
+    };
+    this._likeCache.set(id, result);
+    return result;
+  }
+
+  #ensureLikedIds() {
+    if (this._likedLoad) {
+      return;
+    }
+    this._likedLoad = this.playlistTracks("LM")
+      .then((tracks) => {
+        this._likedIds = new Set((tracks || []).map((row) => row.id).filter(Boolean));
+        return this._likedIds;
+      })
+      .catch(() => {
+        this._likedIds = this._likedIds || new Set();
+        return this._likedIds;
+      });
+  }
+
+  async renamePlaylist(playlistId, name) {
+    this.#requireLogin();
+    const id = playlistEditId(playlistId);
+    if (!playlistIsEditable(id)) {
+      throw new Error("this playlist cannot be renamed");
+    }
+    return renamePlaylistRequest({
+      execute: (endpoint, body) => this.yt.actions.execute(endpoint, body),
+      playlistId: id,
+      name,
+    });
+  }
+
+  async deletePlaylist(playlistId) {
+    this.#requireLogin();
+    const id = playlistEditId(playlistId);
+    if (!playlistIsEditable(id)) {
+      throw new Error("this playlist cannot be deleted");
+    }
+    return deletePlaylistRequest({
+      execute: (endpoint, body) => this.yt.actions.execute(endpoint, body),
+      playlistId: id,
+    });
+  }
+
+  async mixPlaylist(playlistId) {
+    this.#requireLogin();
+    const radio = playlistRadioId(playlistId);
+    if (!radio) {
+      throw new Error("playlist id is required");
+    }
+    let tracks = [];
+    let title = "Mix";
+    try {
+      const pl = await this.yt.music.getPlaylist(radio);
+      tracks = extractSongs(pl.videos || pl.items || pl.contents || []).slice(0, 50);
+      title = textOf(pl.title) || textOf(pl.header?.title) || textOf(pl.info?.title) || "Mix";
+    } catch {
+      /* fall through to a seed-track mix */
+    }
+    if (tracks.length < 2) {
+      const source = await this.playlistTracks(playlistId);
+      const seed = source.find((row) => row.playable !== false) || source[0];
+      if (!seed?.id) {
+        throw new Error("could not start a mix for this playlist");
+      }
+      return this.mix(seed.id);
+    }
+    return { tracks, title, playlist_id: radio };
   }
 
   async addToPlaylist(playlistId, videoId) {

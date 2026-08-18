@@ -30,6 +30,7 @@ from .models import (
     parse_status,
     parse_tracks,
     queue_needs_rebuild,
+    should_apply_engine_rating,
     song_menu_actions,
 )
 from .theme import (
@@ -79,6 +80,9 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         self._theme_reload_id = 0
         self._sleep_minutes = 30
         self._sleep_picking = False
+        self._rating_syncing = False
+        self._rating_track = ""
+        self._rating_hold_until = 0.0
         self._cmd_q: queue.Queue = queue.Queue()
         self._pump_stop = threading.Event()
         self._login_timer = 0
@@ -90,6 +94,7 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         self._notice = ""
         self._notice_until = 0.0
 
+        self._install_icons()
         Gtk.StyleContext.add_provider_for_display(
             Gdk.Display.get_default(),
             self._css,
@@ -141,6 +146,14 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         self.btn_account.connect("clicked", self._on_account)
         bar.pack_end(self.btn_account)
         self.set_titlebar(bar)
+
+    def _install_icons(self) -> None:
+        display = Gdk.Display.get_default()
+        if display is None:
+            return
+        theme = Gtk.IconTheme.get_for_display(display)
+        root = Path(__file__).resolve().parent / "icons"
+        theme.add_search_path(str(root))
 
     def _icon_button(self, icon: str, tooltip: str, *, toggle: bool = False) -> Gtk.Button:
         btn: Gtk.Button = Gtk.ToggleButton() if toggle else Gtk.Button()
@@ -200,7 +213,10 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         self.btn_rep = self._icon_button("media-playlist-repeat-symbolic", "Repeat off", toggle=True)
         self.btn_auto = self._icon_button("media-playlist-consecutive-symbolic", "Play similar after queue (off)", toggle=True)
         self.btn_sleep = self._icon_button("alarm-symbolic", "Sleep timer off", toggle=True)
+        self.btn_like = self._icon_button("music-thumb-up-symbolic", "Like", toggle=True)
+        self.btn_like.add_css_class("rate")
         self.btn_sleep.connect("toggled", self._on_sleep_toggle)
+        self.btn_like.connect("toggled", self._on_like)
         self.btn_prev.connect("clicked", lambda *_: self._cmd("prev"))
         self.btn_play.connect("clicked", lambda *_: self._cmd("toggle"))
         self.btn_stop.connect("clicked", lambda *_: self._cmd("stop"))
@@ -217,6 +233,7 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
             self.btn_rep,
             self.btn_auto,
             self.btn_sleep,
+            self.btn_like,
         ):
             controls.append(btn)
         vol_box = Gtk.Box(spacing=8, hexpand=True, halign=Gtk.Align.END)
@@ -559,11 +576,20 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
             if payload is not None:
                 try:
                     resp = self.ipc.request(payload, timeout=timeout, raise_on_error=False)
-                    if not resp.get("ok", True):
+                    if payload.get("cmd") in {"track.like", "track.unlike"}:
+                        GLib.idle_add(self._on_like_result, payload, resp)
+                    elif not resp.get("ok", True):
                         GLib.idle_add(self._set_footer, resp.get("error") or "engine error")
                     elif payload.get("cmd") == "playlist.add":
                         GLib.idle_add(self._set_footer, "saved to playlist")
-                    elif payload.get("cmd") in {"track.play_next", "track.queue", "queue.move", "queue.remove", "track.mix"}:
+                    elif payload.get("cmd") in {
+                        "track.play_next",
+                        "track.queue",
+                        "queue.move",
+                        "queue.remove",
+                        "track.mix",
+                        "playlist.mix",
+                    }:
                         GLib.idle_add(self._refresh_queue)
                 except (OSError, EngineError) as exc:
                     GLib.idle_add(self._set_footer, str(exc))
@@ -597,8 +623,15 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         self._apply_status()
         now = self.status.track.id if self.status.track else ""
         if now != prev:
+            self._rating_track = now
+            self._rating_hold_until = 0.0
+            self._set_rating(None)
             self._load_art(self.status.track)
             self._load_lyrics(now)
+        if raw.get("liked") is not None and should_apply_engine_rating(
+            hold_until=self._rating_hold_until, now=time.monotonic()
+        ):
+            self._set_rating(self.status.liked)
         sig = str(raw.get("queue_sig") or "")
         if not self._dragging and sig and sig != self._queue_sig:
             self._queue_sig = sig
@@ -727,6 +760,36 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         if self._syncing:
             return
         self._queue_cmd({"cmd": "automix", "name": "on" if btn.get_active() else "off"})
+
+    def _set_rating(self, liked: bool | None) -> None:
+        self._rating_syncing = True
+        try:
+            self.btn_like.set_active(bool(liked))
+            self.btn_like.set_tooltip_text("Unlike" if liked else "Like")
+        finally:
+            self._rating_syncing = False
+
+    def _on_like(self, btn: Gtk.ToggleButton) -> None:
+        if self._rating_syncing:
+            return
+        tid = self.status.track.id if self.status.track else ""
+        if not tid:
+            self._set_rating(False)
+            return
+        liked = bool(btn.get_active())
+        self._rating_hold_until = time.monotonic() + 2.5
+        self._set_rating(liked)
+        self._queue_cmd({"cmd": "track.like" if liked else "track.unlike", "id": tid})
+
+    def _on_like_result(self, payload: dict, resp: dict) -> bool:
+        if resp.get("ok"):
+            self._set_rating(bool(resp.get("liked")))
+            self._rating_hold_until = time.monotonic() + 0.4
+            return False
+        self._rating_hold_until = 0.0
+        self._set_rating(self.status.liked)
+        self._show_notice(resp.get("error") or "could not update like")
+        return False
 
     def _on_sleep_toggle(self, btn: Gtk.ToggleButton) -> None:
         if self._syncing:
