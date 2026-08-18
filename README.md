@@ -14,6 +14,17 @@ Works on **Omarchy** and other Arch-family systems including **CachyOS**. The ba
 
 ![Music](docs/screenshots/music.png)
 
+## Features
+
+- Plays YouTube Music from the signed-in browser session on this computer
+- Queue, lyrics, search, and your playlists
+- Like the current track (syncs with Liked Music)
+- Right-click a playlist to rename, delete, or start a mix
+- Shuffle, repeat, play similar, sleep timer, and a ten-band EQ
+- Close the window and audio keeps playing; Ctrl+Q quits
+- Follows the current Omarchy theme when those files exist
+- Optional Omarchy bar chip and Hyprland float rules
+
 ## Needs
 
 - Node 22+ (`nodejs`, `npm`)
