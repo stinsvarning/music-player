@@ -13,7 +13,23 @@ Platform.shim.eval = async (data) => {
   const src = typeof data === "string" ? data : data.output;
   return new Function(src)();
 };
+import { LOGIN_REQUIRED } from "./cookies.js";
 import { pickAudioFormat } from "./formats.js";
+import { saveQueue } from "./save-queue.js";
+import { continuePlaylistCollection, startPlaylistCollection } from "./library.js";
+import {
+  collectAllTracks,
+  continueSearchCollection,
+  continueTrackCollection,
+  extractSongs,
+  panelSongs,
+  songRadioId,
+  startSearchCollection,
+  startTrackCollection,
+  uniqueAfter,
+} from "./mix.js";
+import { parseLyrics, parseVtt } from "./lyrics.js";
+import { playlistEditId, textOf } from "./text.js";
 
 const http1 = new Agent({ allowH2: false });
 
@@ -33,18 +49,46 @@ const BOTGUARD_KEY = "O43z0dpjhgX20SCx4KAo";
 export class Youtube {
   constructor() {
     this.yt = null;
+    this.loggedIn = false;
+    this.authSource = "";
+    this.authError = "";
+    this._playlistSession = null;
+    this._trackSession = null;
+    this._searchSession = null;
+    this._cookie = "";
+  }
+
+  disconnect() {
+    this.yt = null;
+    this.loggedIn = false;
+    this.authSource = "";
+    this._cookie = "";
+    this._playlistSession = null;
+    this._trackSession = null;
+    this._searchSession = null;
+  }
+
+  #requireLogin() {
+    if (!this.yt) {
+      throw new Error(LOGIN_REQUIRED);
+    }
   }
 
   async connect(cookieHeader) {
     if (!cookieHeader) {
-      throw new Error("no YouTube cookies — open Zen, stay logged into YouTube Music, restart");
+      this.disconnect();
+      this.authError = LOGIN_REQUIRED;
+      throw new Error(LOGIN_REQUIRED);
     }
+    this._cookie = cookieHeader;
     this.yt = await Innertube.create({
       cache: new UniversalCache(false),
       cookie: cookieHeader,
       generate_session_locally: true,
       fetch: ytFetch,
     });
+    this.loggedIn = true;
+    this.authError = "";
     try {
       await this.#applyPoToken();
     } catch (err) {
@@ -52,55 +96,249 @@ export class Youtube {
     }
   }
 
-  async search(query, limit = 20) {
-    const res = await this.yt.music.search(query, { type: "song" });
-    return takeSongs(res?.songs?.contents || res?.contents || [], limit);
+  async search(query) {
+    this.#requireLogin();
+    const q = String(query || "").trim();
+    if (!q) {
+      this._searchSession = null;
+      return { tracks: [], done: true, query: "" };
+    }
+    const res = await this.yt.music.search(q, { type: "song" });
+    const session = startSearchCollection(res);
+    this._searchSession = { query: q, pages: 1, ...session };
+    return { tracks: session.tracks, done: session.done, query: q };
+  }
+
+  async searchMore(query) {
+    if (!this._searchSession || this._searchSession.done) {
+      return { tracks: [], done: true, query: this._searchSession?.query || "" };
+    }
+    if (query && query !== this._searchSession.query) {
+      return { tracks: [], done: true, query: this._searchSession.query };
+    }
+    if ((this._searchSession.pages || 1) >= 20) {
+      return { tracks: [], done: true, query: this._searchSession.query };
+    }
+    const session = await continueSearchCollection(this._searchSession);
+    this._searchSession = {
+      query: this._searchSession.query,
+      pages: (this._searchSession.pages || 1) + 1,
+      ...session,
+    };
+    return {
+      tracks: session.tracks,
+      done: session.done || this._searchSession.pages >= 20,
+      query: this._searchSession.query,
+    };
   }
 
   async playlists() {
+    this.#requireLogin();
     const lib = await this.yt.music.getLibrary();
-    const items = [];
-    collect(lib.contents, items);
-    return items
-      .filter((it) => it.item_type === "playlist" || it.playlist_id || (it.id && String(it.id).startsWith("PL")))
-      .map((it) => ({
-        id: it.id || it.playlist_id,
-        name: it.title || it.name || "playlist",
-        track_count: parseCount(it.item_count || it.song_count),
-      }))
-      .filter((p) => p.id);
+    this._playlistSession = await startPlaylistCollection(lib);
+    return {
+      playlists: this._playlistSession.playlists,
+      done: this._playlistSession.done,
+    };
+  }
+
+  async playlistsMore() {
+    if (!this._playlistSession || this._playlistSession.done) {
+      return { playlists: [], done: true };
+    }
+    this._playlistSession = await continuePlaylistCollection(this._playlistSession);
+    return {
+      playlists: this._playlistSession.playlists,
+      done: this._playlistSession.done,
+    };
   }
 
   async playlistTracks(id) {
+    this.#requireLogin();
     const pl = await this.yt.music.getPlaylist(id);
-    const contents = pl.videos || pl.items || pl.contents || [];
-    return takeSongs(contents, 500);
+    return collectAllTracks(pl);
+  }
+
+  async playlistTracksPage(id) {
+    this.#requireLogin();
+    const pl = await this.yt.music.getPlaylist(id);
+    const session = startTrackCollection(pl);
+    this._trackSession = { id, ...session };
+    return { tracks: session.tracks, done: session.done };
+  }
+
+  async playlistTracksMore(id) {
+    if (!this._trackSession || this._trackSession.done) {
+      return { tracks: [], done: true };
+    }
+    if (id && id !== this._trackSession.id) {
+      return { tracks: [], done: true };
+    }
+    const session = await continueTrackCollection(this._trackSession);
+    this._trackSession = { id: this._trackSession.id, ...session };
+    return { tracks: session.tracks, done: session.done };
+  }
+
+  async mix(videoId) {
+    this.#requireLogin();
+    const id = textOf(videoId);
+    if (!id) {
+      throw new Error("track id is required");
+    }
+    let tracks = [];
+    let title = "Mix";
+    try {
+      const panel = await this.yt.music.getUpNext(id, true);
+      tracks = panelSongs(panel, 50);
+      title = textOf(panel?.title) || textOf(panel?.title_text) || "Mix";
+    } catch {
+      /* fall through to radio playlist */
+    }
+    if (tracks.length < 2) {
+      try {
+        const pl = await this.yt.music.getPlaylist(songRadioId(id));
+        tracks = extractSongs(pl.videos || pl.items || pl.contents || []).slice(0, 50);
+      } catch {
+        /* keep whatever we have */
+      }
+    }
+    if (!tracks.some((t) => t.id === id)) {
+      tracks.unshift({
+        id,
+        title: id,
+        artist: "",
+        album: "",
+        duration_secs: 0,
+      });
+    } else {
+      const idx = tracks.findIndex((t) => t.id === id);
+      if (idx > 0) {
+        const [seed] = tracks.splice(idx, 1);
+        tracks.unshift(seed);
+      }
+    }
+    if (!tracks.length) {
+      throw new Error("could not start a mix for this song");
+    }
+    return { tracks, title, playlist_id: songRadioId(id) };
+  }
+
+  async similar(videoId, { exclude = [] } = {}) {
+    const mix = await this.mix(videoId);
+    return uniqueAfter(mix.tracks, exclude);
+  }
+
+  async addToPlaylist(playlistId, videoId) {
+    this.#requireLogin();
+    const id = playlistEditId(playlistId);
+    const video = textOf(videoId);
+    if (!id || !video) {
+      throw new Error("playlist and video id are required");
+    }
+    await this.yt.playlist.addVideos(id, [video]);
+    return { playlist_id: id, video_id: video };
+  }
+
+  async lyrics(videoId) {
+    this.#requireLogin();
+    const id = String(videoId || "").trim();
+    if (!id) {
+      throw new Error("track id is required");
+    }
+    let page = { text: "", footer: "", found: false, lines: [] };
+    try {
+      page = parseLyrics(await this.yt.music.getLyrics(id));
+    } catch {
+      page = { text: "", footer: "", found: false, lines: [] };
+    }
+    const timed = await this.#captionLines(id);
+    if (timed.length) {
+      return {
+        text: timed.map((row) => row.text).join("\n"),
+        footer: page.footer,
+        found: true,
+        lines: timed,
+      };
+    }
+    return page;
+  }
+
+  async #captionLines(videoId) {
+    if (typeof this.yt?.music?.getInfo !== "function") {
+      return [];
+    }
+    try {
+      const info = await this.yt.music.getInfo(videoId);
+      const tracks = info?.captions?.caption_tracks || [];
+      const track =
+        tracks.find((row) => row && !row.kind && row.base_url) ||
+        tracks.find((row) => row?.base_url);
+      if (!track?.base_url) {
+        return [];
+      }
+      const url = new URL(track.base_url, "https://www.youtube.com");
+      url.searchParams.set("fmt", "vtt");
+      const resp = await ytFetch(url, { headers: { cookie: this._cookie || "" } });
+      if (!resp.ok) {
+        return [];
+      }
+      return parseVtt(await resp.text());
+    } catch {
+      return [];
+    }
+  }
+
+  async saveQueue({ title, playlistId, videoIds }) {
+    this.#requireLogin();
+    return saveQueue({
+      title,
+      playlistId,
+      videoIds,
+      create: (name, ids) => this.yt.playlist.create(name, ids),
+      addVideos: (id, ids) => this.yt.playlist.addVideos(id, ids),
+    });
   }
 
   async streamUrl(videoId) {
-    let info;
-    try {
-      info = await this.yt.music.getInfo(videoId);
-    } catch (err) {
-      await this.#applyPoToken();
-      info = await this.yt.music.getInfo(videoId);
-      if (!info) {
-        throw err;
+    this.#requireLogin();
+    const id = String(videoId || "").trim();
+    if (!id) {
+      throw new Error("track id is required");
+    }
+    let lastError = new Error("no audio format from YouTube Music");
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      if (attempt === 1) {
+        await this.#applyPoToken();
       }
+      if (attempt === 2 && this._cookie) {
+        await this.connect(this._cookie);
+      }
+      let info;
+      try {
+        info = await this.yt.music.getInfo(id);
+      } catch (err) {
+        lastError = err;
+        continue;
+      }
+      const formats = [
+        ...(info.streaming_data?.adaptive_formats || []),
+        ...(info.streaming_data?.formats || []),
+      ];
+      const picked = pickAudioFormat(formats);
+      if (!picked) {
+        lastError = new Error("no audio format from YouTube Music");
+        continue;
+      }
+      const kbps = Math.round(Number(picked.average_bitrate || picked.bitrate || 0) / 1000);
+      console.error(`audio itag=${picked.itag} ${picked.audio_quality || "unknown"} ${kbps}kbps`);
+      const url = await picked.decipher(this.yt.session.player);
+      if (!url) {
+        lastError = new Error("could not decipher audio url");
+        continue;
+      }
+      return url;
     }
-    const formats = [
-      ...(info.streaming_data?.adaptive_formats || []),
-      ...(info.streaming_data?.formats || []),
-    ];
-    const picked = pickAudioFormat(formats);
-    if (!picked) {
-      throw new Error("no audio format from YouTube Music");
-    }
-    const url = await picked.decipher(this.yt.session.player);
-    if (!url) {
-      throw new Error("could not decipher audio url");
-    }
-    return url;
+    throw lastError;
   }
 
   async #applyPoToken() {
@@ -152,67 +390,3 @@ export class Youtube {
   }
 }
 
-function collect(node, out) {
-  if (!node) {
-    return;
-  }
-  if (Array.isArray(node)) {
-    for (const child of node) {
-      collect(child, out);
-    }
-    return;
-  }
-  if (node.contents) {
-    collect(node.contents, out);
-  }
-  if (node.items) {
-    collect(node.items, out);
-  }
-  if (node.item_type || node.id || node.title) {
-    out.push(node);
-  }
-}
-
-function takeSongs(nodes, limit) {
-  const songs = [];
-  const walk = (list) => {
-    if (!list) {
-      return;
-    }
-    const arr = Array.isArray(list) ? list : list.contents || list.items || [];
-    for (const it of arr) {
-      if (songs.length >= limit) {
-        return;
-      }
-      if (it?.contents || it?.items) {
-        walk(it);
-        continue;
-      }
-      const id = it.id || it.video_id;
-      const type = it.item_type;
-      if (!id) {
-        continue;
-      }
-      if (type && type !== "song" && type !== "video") {
-        continue;
-      }
-      songs.push({
-        id,
-        title: it.title || it.name || id,
-        artist: (it.artists && it.artists[0]?.name) || it.author?.name || "",
-        album: it.album?.name || "",
-        duration_secs: it.duration?.seconds || 0,
-      });
-    }
-  };
-  walk(nodes);
-  return songs;
-}
-
-function parseCount(text) {
-  if (!text) {
-    return 0;
-  }
-  const n = parseInt(String(text).replace(/[^\d]/g, ""), 10);
-  return Number.isFinite(n) ? n : 0;
-}

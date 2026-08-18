@@ -1,41 +1,91 @@
 import fs from "node:fs";
 import net from "node:net";
-import { encode, fail, ok, parseRequest } from "./protocol.js";
+import { commandCatalog } from "./commands.js";
+import { attachId, encode, fail, ok, parseRequest } from "./protocol.js";
+import { pingEngine } from "./singleton.js";
 
-export function listen(socketPath, handler) {
-  try {
-    fs.unlinkSync(socketPath);
-  } catch {
-    /* missing is fine */
-  }
-  const server = net.createServer((sock) => {
+function createIpcServer(handler) {
+  return net.createServer((sock) => {
     let buf = "";
-    sock.on("data", async (chunk) => {
+    let chain = Promise.resolve();
+    sock.on("data", (chunk) => {
       buf += chunk.toString();
       while (buf.includes("\n")) {
         const idx = buf.indexOf("\n");
         const line = buf.slice(0, idx);
         buf = buf.slice(idx + 1);
         const parsed = parseRequest(line);
-        let resp;
-        try {
-          resp = parsed.ok ? await handler(parsed.request) : fail(parsed.error);
-        } catch (err) {
-          resp = fail(err.message || err);
-        }
-        sock.write(encode(resp));
+        chain = chain
+          .then(async () => {
+            let resp;
+            try {
+              resp = parsed.ok ? await handler(parsed.request) : fail(parsed.error);
+            } catch (err) {
+              resp = fail(err.message || err);
+            }
+            if (!sock.destroyed) {
+              const req = parsed.ok ? parsed.request : {};
+              sock.write(encode(attachId(req, resp)));
+            }
+          })
+          .catch(() => {});
       }
     });
+    sock.on("error", () => {});
   });
-  server.listen(socketPath);
-  fs.chmodSync(socketPath, 0o600);
-  return server;
+}
+
+function bindUnix(server, socketPath) {
+  return new Promise((resolve, reject) => {
+    const onError = (err) => {
+      server.off("listening", onListening);
+      reject(err);
+    };
+    const onListening = () => {
+      server.off("error", onError);
+      resolve(server);
+    };
+    server.once("error", onError);
+    server.once("listening", onListening);
+    server.listen(socketPath);
+  });
+}
+
+export async function listen(socketPath, handler) {
+  if (await pingEngine(socketPath)) {
+    throw new Error("engine already listening");
+  }
+  try {
+    const server = await bindUnix(createIpcServer(handler), socketPath);
+    fs.chmodSync(socketPath, 0o600);
+    return server;
+  } catch (err) {
+    if (err.code !== "EADDRINUSE") {
+      throw err;
+    }
+    if (await pingEngine(socketPath)) {
+      throw new Error("engine already listening");
+    }
+    try {
+      fs.unlinkSync(socketPath);
+    } catch {
+      /* missing is fine */
+    }
+    const server = await bindUnix(createIpcServer(handler), socketPath);
+    fs.chmodSync(socketPath, 0o600);
+    return server;
+  }
 }
 
 export async function dispatch(player, youtube, req) {
   switch (req.cmd) {
+    case "help":
+    case "commands":
+      return ok({ commands: commandCatalog() });
     case "status":
       return ok(await player.status());
+    case "bands":
+      return ok({ bands: await player.bands() });
     case "play":
       await player.play();
       return ok();
@@ -66,6 +116,12 @@ export async function dispatch(player, youtube, req) {
     case "repeat":
       player.setRepeat(req.name || "cycle");
       return ok({ repeat: player.repeat });
+    case "automix":
+      player.setAutomix(req.name || "toggle");
+      return ok({ automix: player.automix });
+    case "track.mix":
+      await player.startMix(req.track);
+      return ok({ total: player.queue.length, index: player.index });
     case "eq":
       if (req.band != null && req.band >= 0) {
         await player.setEqBand(req.band, req.value);
@@ -79,24 +135,57 @@ export async function dispatch(player, youtube, req) {
       await player.playIndex(req.index);
       return ok();
     case "track.play":
-      await player.playTrack(req.track, { replaceQueue: false });
-      return ok();
+      await player.playTrack(req.track, { replaceQueue: req.replace !== false });
+      return ok({ total: player.queue.length, index: player.index });
+    case "sleep":
+      player.setSleep(req.minutes ?? req.value ?? 0);
+      return ok({ sleep_minutes: player.sleepMinutes, sleep_remaining: player.sleepRemaining() });
     case "track.queue":
       player.queueTrack(req.track);
+      return ok({ total: player.queue.length, index: player.index });
+    case "track.play_next":
+      player.playNext(req.track);
+      return ok({ total: player.queue.length, index: player.index });
+    case "queue.move":
+      player.move(req.from, req.to);
+      return ok({ tracks: player.queue, index: player.index, total: player.queue.length });
+    case "queue.remove":
+      player.removeAt(req.index);
+      return ok({ tracks: player.queue, index: player.index, total: player.queue.length });
+    case "playlist.add":
+      await youtube.addToPlaylist(req.playlist_id, req.video_id);
       return ok();
-    case "search":
-      return ok({ tracks: await youtube.search(req.query, req.limit || 20) });
-    case "playlists":
-      return ok({ playlists: await youtube.playlists() });
+    case "queue.save": {
+      const result = await youtube.saveQueue({
+        title: req.name || req.title,
+        playlistId: req.playlist_id,
+        videoIds: player.queue,
+      });
+      return ok(result);
+    }
+    case "search": {
+      const page = await youtube.search(req.query);
+      return ok({ tracks: page.tracks, done: page.done, query: page.query });
+    }
+    case "search.more": {
+      const page = await youtube.searchMore(req.query);
+      return ok({ tracks: page.tracks, done: page.done, query: page.query });
+    }
+    case "playlists": {
+      const page = await youtube.playlists();
+      return ok({ playlists: page.playlists, done: page.done });
+    }
+    case "playlists.more": {
+      const page = await youtube.playlistsMore();
+      return ok({ playlists: page.playlists, done: page.done });
+    }
     case "playlist.tracks": {
-      const tracks = await youtube.playlistTracks(req.id);
-      if (req.load) {
-        player.replaceQueue(tracks, 0);
-        if (tracks.length) {
-          await player.playIndex(0);
-        }
-      }
-      return ok({ tracks, total: tracks.length });
+      const page = await youtube.playlistTracksPage(req.id);
+      return ok({ tracks: page.tracks, done: page.done, total: page.tracks.length });
+    }
+    case "playlist.tracks.more": {
+      const page = await youtube.playlistTracksMore(req.id);
+      return ok({ tracks: page.tracks, done: page.done, total: page.tracks.length });
     }
     case "playlist.play": {
       const tracks = await youtube.playlistTracks(req.id);
@@ -105,6 +194,20 @@ export async function dispatch(player, youtube, req) {
         await player.playIndex(player.index);
       }
       return ok({ total: tracks.length });
+    }
+    case "lyrics": {
+      const id = String(req.id || player.queue?.[player.index]?.id || "").trim();
+      if (!id) {
+        return ok({ id: "", text: "", footer: "", found: false });
+      }
+      const page = await youtube.lyrics(id);
+      return ok({
+        id,
+        text: page.text || "",
+        footer: page.footer || "",
+        found: Boolean(page.found),
+        lines: page.lines || [],
+      });
     }
     case "shutdown":
       return ok({ shutdown: true });

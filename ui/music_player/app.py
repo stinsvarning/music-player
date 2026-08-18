@@ -29,6 +29,7 @@ class MusicApplication(Gtk.Application):
         self.supervisor: EngineSupervisor | None = None
         self.window: PlayerWindow | None = None
         self._stopping = False
+        self._activating = False
 
     def do_startup(self) -> None:
         Gtk.Application.do_startup(self)
@@ -39,32 +40,39 @@ class MusicApplication(Gtk.Application):
         if self.window is not None:
             self.window.present()
             return
-        sock = default_socket()
-        ipc = EngineIPC(sock)
-        self.supervisor = EngineSupervisor(binary=engine_entry(), socket_path=str(sock), ipc=ipc)
-        try:
-            self.supervisor.ensure()
-        except Exception as exc:  # noqa: BLE001
-            self._fail(str(exc))
+        if self._activating:
             return
-        self.window = PlayerWindow(self, ipc)
-        self.window.connect("close-request", self._on_close)
-        self.window.present()
+        self._activating = True
+        try:
+            sock = default_socket()
+            ipc = EngineIPC(sock)
+            self.supervisor = EngineSupervisor(binary=engine_entry(), socket_path=str(sock), ipc=ipc)
+            try:
+                self.supervisor.ensure()
+            except Exception as exc:  # noqa: BLE001
+                self._fail(str(exc))
+                return
+            self.window = PlayerWindow(self, ipc)
+            self.window.connect("close-request", self._on_close)
+            self.window.present()
+        finally:
+            self._activating = False
 
     def do_shutdown(self) -> None:
-        self._stop()
+        if self.window is not None:
+            self.window.stop_pump()
         Gtk.Application.do_shutdown(self)
 
     def _on_close(self, *_a) -> bool:
-        self._stop()
+        if self.window is not None:
+            self.window.stop_pump()
         return False
 
     def _signal_quit(self) -> bool:
-        self._stop()
         self.quit()
         return GLib.SOURCE_REMOVE
 
-    def _stop(self) -> None:
+    def quit_engine(self) -> None:
         if self._stopping:
             return
         self._stopping = True
@@ -72,6 +80,7 @@ class MusicApplication(Gtk.Application):
             self.window.stop_pump()
         if self.supervisor is not None:
             self.supervisor.shutdown()
+        self.quit()
 
     def _fail(self, message: str) -> None:
         dialog = Gtk.AlertDialog(message="music-player", detail=message)

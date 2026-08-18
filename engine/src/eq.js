@@ -2,16 +2,96 @@ export const BANDS_HZ = [60, 170, 310, 600, 1000, 3000, 6000, 12000, 14000, 1600
 
 export const PRESETS = {
   Flat: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-  Rock: [5, 4, 2, -1, -2, 2, 4, 5, 5, 5],
-  Jazz: [4, 3, 1, 2, -2, -2, 0, 1, 2, 3],
-  Pop: [-1, 2, 4, 4, 1, -1, -2, -2, -1, -1],
-  "Bass Boost": [8, 6, 4, 2, 0, 0, 0, 0, 0, 0],
+  Warm: [2, 2, 1, 0, 0, 0, 0, 1, 1, 1],
+  Vocal: [0, -2, -2, 0, 2, 3, 1, 0, 0, 0],
+  Bass: [4, 3, 1, 0, 0, 0, 0, 0, 0, 0],
+  Night: [1, 0, 0, 0, 0, -1, -2, -3, -2, -2],
 };
 
-export function lavfiEqualizer(gains) {
-  const bands = BANDS_HZ.map((hz, i) => {
-    const g = Number(gains[i] ?? 0);
-    return `equalizer=f=${hz}:t=q:w=1.2:g=${g}`;
-  });
-  return `lavfi=[${bands.join(",")}]`;
+export function preampFor(gains) {
+  const peak = Math.max(0, ...(Array.isArray(gains) ? gains : []).map((g) => Number(g) || 0));
+  return peak > 0 ? -peak : 0;
+}
+
+export function lavfiEqualizer(gains, metaDir = "") {
+  const stages = [];
+  const pre = preampFor(gains);
+  if (pre < 0) {
+    stages.push(`volume=${pre}dB`);
+  }
+  for (let i = 0; i < BANDS_HZ.length; i += 1) {
+    stages.push(`equalizer=f=${BANDS_HZ[i]}:t=q:w=1.2:g=${Number(gains[i] ?? 0)}`);
+  }
+  const eq = stages.join(",");
+  if (!metaDir) {
+    return `lavfi=[${eq}]`;
+  }
+  const taps = BANDS_HZ.map((_, i) => `[s${i}]`).join("");
+  const splits = BANDS_HZ.map((hz, i) => {
+    const dest = escapeLavfiPath(spectrumBandFile(metaDir, i));
+    return (
+      `[s${i}]bandpass=f=${hz}:width_type=q:w=1.2,` +
+      `astats=metadata=1:reset=1:length=0.08,` +
+      `ametadata=mode=print:file='${dest}':key=lavfi.astats.Overall.RMS_level:direct=1,` +
+      `anullsink`
+    );
+  }).join(";");
+  return `lavfi=[asplit=2[main][spec];[spec]asplit=10${taps};${splits};[main]${eq}]`;
+}
+
+export function spectrumBandFile(metaDir, index) {
+  return `${String(metaDir).replace(/\/$/, "")}/${index}`;
+}
+
+function escapeLavfiPath(filePath) {
+  return String(filePath).replaceAll("\\", "/").replaceAll(":", "\\:").replaceAll("'", "\\'");
+}
+
+export function dbToUnit(db) {
+  if (!Number.isFinite(db)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(1, (db + 70) / 70));
+}
+
+export function flattenAfMetadata(meta) {
+  if (!meta || typeof meta !== "object") {
+    return {};
+  }
+  const out = { ...meta };
+  for (const [key, value] of Object.entries(meta)) {
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      for (const [inner, innerVal] of Object.entries(value)) {
+        out[inner] = innerVal;
+        out[`${key}.${inner}`] = innerVal;
+      }
+    }
+  }
+  return out;
+}
+
+export function parseAmetadataLog(text) {
+  const last = {};
+  for (const line of String(text || "").split("\n")) {
+    const idx = line.indexOf("=");
+    if (idx < 0) {
+      continue;
+    }
+    const key = line.slice(0, idx).trim();
+    if (!key.includes("astats")) {
+      continue;
+    }
+    last[key] = line.slice(idx + 1).trim();
+  }
+  return last;
+}
+
+export function bandsFromMetadata(meta) {
+  const src = flattenAfMetadata(meta);
+  const bands = [];
+  for (let i = 1; i <= 10; i += 1) {
+    const raw = src[`lavfi.astats.${i}.RMS_level`] ?? src[`lavfi.astats.Overall.RMS_level`];
+    bands.push(dbToUnit(Number(raw)));
+  }
+  return bands;
 }

@@ -17,10 +17,12 @@ class EngineSupervisor:
         self.proc: subprocess.Popen[bytes] | None = None
         self.owned = False
 
-    def ensure(self, timeout: float = 12.0) -> bool:
+    def ensure(self, timeout: float = 20.0) -> bool:
         if self.ipc.alive():
             self.owned = False
             return True
+        if self._existing_engine_pid():
+            return self._wait_ready(timeout)
         self._clear_stale()
         env = os.environ.copy()
         self.proc = subprocess.Popen(
@@ -41,6 +43,33 @@ class EngineSupervisor:
                 if self.proc.stderr:
                     err = self.proc.stderr.read() or b""
                 raise RuntimeError((err.decode(errors="replace") or "engine exited").strip())
+            time.sleep(0.1)
+        raise TimeoutError("engine did not become ready")
+
+    def _existing_engine_pid(self) -> int:
+        pid_path = Path(str(self.socket_path) + ".pid")
+        if not pid_path.is_file():
+            return 0
+        try:
+            pid = int(pid_path.read_text().strip())
+        except ValueError:
+            return 0
+        if pid <= 0:
+            return 0
+        try:
+            os.kill(pid, 0)
+            return pid
+        except OSError:
+            return 0
+
+    def _wait_ready(self, timeout: float) -> bool:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if self.ipc.alive():
+                self.owned = False
+                return True
+            if not self._existing_engine_pid():
+                break
             time.sleep(0.1)
         raise TimeoutError("engine did not become ready")
 
@@ -65,6 +94,7 @@ class EngineSupervisor:
                 except OSError:
                     pass
         self._kill_pidfile()
+        self._kill_orphan_mpv()
         self.owned = False
         self.proc = None
 
@@ -79,7 +109,8 @@ class EngineSupervisor:
             if pid:
                 try:
                     os.kill(pid, 0)
-                    return
+                    if self.ipc.alive():
+                        return
                 except OSError:
                     pass
             try:
@@ -91,6 +122,23 @@ class EngineSupervisor:
                 sock.unlink()
             except OSError:
                 pass
+
+    def _kill_orphan_mpv(self) -> None:
+        mpv_sock = str(Path(self.socket_path).with_name("mpv.sock"))
+        try:
+            proc = subprocess.run(
+                ["pgrep", "-f", f"input-ipc-server={mpv_sock}"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError:
+            return
+        for raw in proc.stdout.split():
+            try:
+                os.kill(int(raw), signal.SIGTERM)
+            except (ValueError, OSError):
+                continue
 
     def _kill_pidfile(self) -> None:
         pid_path = Path(str(self.socket_path) + ".pid")

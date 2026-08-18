@@ -26,3 +26,10 @@ export function fail(error) {
 export function encode(obj) {
   return `${JSON.stringify(obj)}\n`;
 }
+
+export function attachId(req, resp) {
+  if (!resp || typeof resp !== "object" || req?.id == null) {
+    return resp;
+  }
+  return { ...resp, id: req.id };
+}

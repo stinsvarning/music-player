@@ -8,6 +8,13 @@ export class Mpv {
     this.socketPath = socketPath;
     this.proc = null;
     this.requestId = 1;
+    this._listeners = new Set();
+    this._eventSock = null;
+  }
+
+  onEvent(fn) {
+    this._listeners.add(fn);
+    return () => this._listeners.delete(fn);
   }
 
   async start() {
@@ -24,6 +31,9 @@ export class Mpv {
         "--force-window=no",
         "--audio-display=no",
         "--no-terminal",
+        "--hr-seek=yes",
+        "--force-seekable=yes",
+        "--load-scripts=no",
         `--input-ipc-server=${this.socketPath}`,
       ],
       { stdio: ["ignore", "ignore", "pipe"] },
@@ -32,6 +42,7 @@ export class Mpv {
     const deadline = Date.now() + 4000;
     while (Date.now() < deadline) {
       if (fs.existsSync(this.socketPath)) {
+        this.#listenEvents();
         return;
       }
       if (this.proc.exitCode != null) {
@@ -99,7 +110,15 @@ export class Mpv {
   }
 
   async seekAbsolute(seconds) {
-    await this.command(["seek", Number(seconds), "absolute"]);
+    const target = Number(seconds);
+    if (!Number.isFinite(target) || target < 0) {
+      return;
+    }
+    try {
+      await this.command(["seek", target, "absolute+exact"]);
+    } catch {
+      await this.command(["set_property", "time-pos", target]);
+    }
   }
 
   async setVolume(volume) {
@@ -110,15 +129,17 @@ export class Mpv {
     await this.command(["set_property", "af", filter]);
   }
 
-  async get(prop) {
-    for (let i = 0; i < 20; i++) {
+  async get(prop, retries = 1) {
+    for (let i = 0; i < retries; i++) {
       try {
         return await this.command(["get_property", prop]);
       } catch (err) {
         if (!String(err.message).includes("unavailable")) {
           throw err;
         }
-        await delay(80);
+        if (i + 1 < retries) {
+          await delay(80);
+        }
       }
     }
     return null;
@@ -138,6 +159,10 @@ export class Mpv {
       }
     }
     this.proc = null;
+    if (this._eventSock) {
+      this._eventSock.destroy();
+      this._eventSock = null;
+    }
     try {
       fs.unlinkSync(this.socketPath);
     } catch {
@@ -147,6 +172,42 @@ export class Mpv {
 
   get pid() {
     return this.proc?.pid ?? null;
+  }
+
+  #listenEvents() {
+    if (this._eventSock) {
+      return;
+    }
+    const sock = net.connect(this.socketPath);
+    this._eventSock = sock;
+    let buf = "";
+    sock.on("data", (chunk) => {
+      buf += chunk.toString();
+      const lines = buf.split("\n");
+      buf = lines.pop() || "";
+      for (const line of lines) {
+        if (!line.trim()) {
+          continue;
+        }
+        let msg;
+        try {
+          msg = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        if (!msg?.event) {
+          continue;
+        }
+        for (const fn of this._listeners) {
+          try {
+            fn(msg);
+          } catch {
+            /* listener errors must not kill the socket */
+          }
+        }
+      }
+    });
+    sock.on("error", () => {});
   }
 
   #connect() {

@@ -2,13 +2,31 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { pickAudioFormat } from "../src/formats.js";
 
-test("prefers itag 140 over higher-bitrate opus", () => {
+test("prefers high AAC over normal AAC and opus", () => {
+  const picked = pickAudioFormat([
+    { itag: 141, has_audio: true, has_video: false, bitrate: 256000, audio_quality: "AUDIO_QUALITY_HIGH" },
+    { itag: 251, has_audio: true, has_video: false, bitrate: 160000, audio_quality: "AUDIO_QUALITY_MEDIUM" },
+    { itag: 140, has_audio: true, has_video: false, bitrate: 128000, audio_quality: "AUDIO_QUALITY_MEDIUM" },
+    { itag: 18, has_audio: true, has_video: true, bitrate: 500000 },
+  ]);
+  assert.equal(picked.itag, 141);
+});
+
+test("prefers higher-bitrate audio-only over itag 140", () => {
   const picked = pickAudioFormat([
     { itag: 251, has_audio: true, has_video: false, bitrate: 160000 },
     { itag: 140, has_audio: true, has_video: false, bitrate: 128000 },
     { itag: 18, has_audio: true, has_video: true, bitrate: 500000 },
   ]);
-  assert.equal(picked.itag, 140);
+  assert.equal(picked.itag, 251);
+});
+
+test("uses average_bitrate when bitrate is missing", () => {
+  const picked = pickAudioFormat([
+    { itag: 141, has_audio: true, has_video: false, average_bitrate: 256000 },
+    { itag: 140, has_audio: true, has_video: false, bitrate: 128000 },
+  ]);
+  assert.equal(picked.itag, 141);
 });
 
 test("falls back to best audio-only bitrate", () => {

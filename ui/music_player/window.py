@@ -11,114 +11,163 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
 
-from gi.repository import Gdk, GdkPixbuf, GLib, Gtk, Pango
+from gi.repository import Gdk, GdkPixbuf, Gio, GLib, GObject, Gtk
 
 from .ipc import EngineError, EngineIPC
-from .models import PlaylistInfo, PlayerStatus, SeekGate, Track, art_url_for, format_time, parse_playlists, parse_status, parse_tracks
-from .theme import PALETTES, Palette, css_for, load_omarchy_palette, palette_named
+from .layout import bind_ellipsize, caption_bar, clear_list, constrain_scroll, make_row
+from .library import LibraryMixin
+from .login import LoginMixin
+from .models import (
+    BrowseState,
+    PlaylistInfo,
+    PlayerStatus,
+    SeekGate,
+    Track,
+    art_url_for,
+    default_queue_playlist_name,
+    format_time,
+    is_login_error,
+    parse_status,
+    parse_tracks,
+    queue_needs_rebuild,
+    song_menu_actions,
+)
+from .theme import (
+    Palette,
+    css_for,
+    load_active_palette,
+    omarchy_colors_paths,
+    omarchy_current_dir,
+    omarchy_state_dir,
+)
 from .widgets.spectrum import SpectrumView
 
+ART_SIZE = 96
+
 EQ_LABELS = ["60", "170", "310", "600", "1k", "3k", "6k", "12k", "14k", "16k"]
-EQ_PRESETS = [("FLAT", "Flat"), ("ROCK", "Rock"), ("JAZZ", "Jazz"), ("VOCAL", "Pop"), ("BASS", "Bass Boost")]
+EQ_PRESETS = [("FLAT", "Flat"), ("WARM", "Warm"), ("VOCAL", "Vocal"), ("BASS", "Bass"), ("NIGHT", "Night")]
+WINDOW_W = 920
+WINDOW_H = 720
+
+__all__ = ["PlayerWindow", "bind_ellipsize", "constrain_scroll"]
 
 
-class PlayerWindow(Gtk.ApplicationWindow):
+class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
     def __init__(self, app: Gtk.Application, ipc: EngineIPC):
-        super().__init__(application=app, title="MUSIC")
-        self.set_default_size(920, 720)
+        super().__init__(application=app, title="Music")
+        self.set_default_size(WINDOW_W, WINDOW_H)
+        self.set_size_request(640, 480)
         self.add_css_class("app-window")
         self.ipc = ipc
         self.status = PlayerStatus()
         self._syncing = False
         self._eq_sending = False
         self._seek = SeekGate()
-        self._palette = palette_named("mint")
+        self._seek_timer = 0
+        self._base_palette = load_active_palette()
+        self._palette = self._base_palette
         self._css = Gtk.CssProvider()
         self._art_token = 0
         self._queue: list[Track] = []
         self._playlists: list[PlaylistInfo] = []
-        self._lib_tracks: list[Track] = []
-        self._search_tracks: list[Track] | None = None
+        self.browse = BrowseState()
+        self._queue_sig = ""
+        self._dragging = False
+        self._drag_from: int | None = None
+        self._ctx_pop: Gtk.Popover | None = None
+        self._theme_monitors: list = []
+        self._theme_reload_id = 0
+        self._sleep_minutes = 30
+        self._sleep_picking = False
         self._cmd_q: queue.Queue = queue.Queue()
         self._pump_stop = threading.Event()
+        self._login_timer = 0
+        self._login_busy = False
+        self._lyrics_id = ""
+        self._lyrics_token = 0
+        self._lyric_lines: list[dict] = []
+        self._playlists_token = 0
 
         Gtk.StyleContext.add_provider_for_display(
             Gdk.Display.get_default(),
             self._css,
             Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
         )
+        self._mapped = False
         self._build()
         self._apply_palette(self._palette)
+        self._watch_theme()
         self._bind_keys()
+        self.connect("map", self._on_map)
+
+    def _on_map(self, *_a) -> None:
+        if self._mapped:
+            return
+        self._mapped = True
         threading.Thread(target=self._pump, daemon=True).start()
         GLib.idle_add(self._bootstrap)
 
     def stop_pump(self) -> None:
         self._pump_stop.set()
+        self._stop_login_watch()
+        if self._seek_timer:
+            GLib.source_remove(self._seek_timer)
+            self._seek_timer = 0
 
     def _build(self) -> None:
+        self._install_header()
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        self.set_child(root)
-        root.append(self._header())
+        root.set_overflow(Gtk.Overflow.HIDDEN)
+        overlay = Gtk.Overlay()
+        overlay.set_child(root)
+        overlay.add_overlay(self._login_overlay())
+        self.set_child(overlay)
         root.append(self._now_playing())
         self.spectrum = SpectrumView()
         wrap = Gtk.Box()
         wrap.add_css_class("chrome")
+        wrap.set_margin_top(0)
         wrap.append(self.spectrum)
         root.append(wrap)
-        root.append(self._transport())
         root.append(self._tabs())
-        root.append(self._footer())
 
-    def _header(self) -> Gtk.Widget:
-        bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        bar.add_css_class("chrome")
-        brand = Gtk.Label(label="MUSIC", xalign=0)
-        brand.add_css_class("brand")
-        self.subtitle = Gtk.Label(label="YouTube Music", hexpand=True)
-        self.subtitle.add_css_class("subtitle")
-        swatches = Gtk.Box(spacing=6)
-        palettes = list(PALETTES)
-        omarchy = Path.home() / ".config/omarchy/current/theme/colors.toml"
-        if omarchy.is_file():
-            try:
-                palettes[1] = load_omarchy_palette(omarchy)
-            except OSError:
-                pass
-        for palette in palettes[:4]:
-            btn = Gtk.Button()
-            btn.add_css_class("swatch")
-            btn.connect("clicked", lambda _b, p=palette: self._apply_palette(p))
-            css = Gtk.CssProvider()
-            css.load_from_data(f"button {{ background: {palette.accent}; }}".encode())
-            btn.get_style_context().add_provider(css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
-            swatches.append(btn)
-        bar.append(brand)
-        bar.append(self.subtitle)
-        bar.append(swatches)
-        return bar
+    def _install_header(self) -> None:
+        bar = Gtk.HeaderBar()
+        # Suppress the default centered window title — identity lives in now-playing.
+        bar.set_title_widget(Gtk.Box())
+        self.btn_account = self._icon_button("system-users-symbolic", "Account")
+        self.btn_account.connect("clicked", self._on_account)
+        bar.pack_end(self.btn_account)
+        self.set_titlebar(bar)
+
+    def _icon_button(self, icon: str, tooltip: str, *, toggle: bool = False) -> Gtk.Button:
+        btn: Gtk.Button = Gtk.ToggleButton() if toggle else Gtk.Button()
+        btn.set_icon_name(icon)
+        btn.set_tooltip_text(tooltip)
+        btn.add_css_class("flat")
+        return btn
 
     def _now_playing(self) -> Gtk.Widget:
-        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
-        row.add_css_class("chrome")
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        box.add_css_class("chrome")
+        box.add_css_class("now-playing")
+
+        top = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         self.art = Gtk.Picture()
-        self.art.set_size_request(88, 88)
+        self.art.set_size_request(ART_SIZE, ART_SIZE)
         self.art.set_content_fit(Gtk.ContentFit.COVER)
-        text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4, valign=Gtk.Align.CENTER, hexpand=True)
-        self.track_title = Gtk.Label(label="nothing playing", xalign=0)
+        text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, valign=Gtk.Align.CENTER, hexpand=True)
+        self.track_title = Gtk.Label(label="Nothing playing", xalign=0)
         self.track_title.add_css_class("title")
-        self.track_title.set_ellipsize(Pango.EllipsizeMode.END)
-        self.track_meta = Gtk.Label(label="youtube music", xalign=0)
+        bind_ellipsize(self.track_title, 48)
+        self.track_meta = Gtk.Label(label="YouTube Music", xalign=0)
         self.track_meta.add_css_class("meta")
+        bind_ellipsize(self.track_meta, 48)
         text.append(self.track_title)
         text.append(self.track_meta)
-        row.append(self.art)
-        row.append(text)
-        return row
+        top.append(self.art)
+        top.append(text)
 
-    def _transport(self) -> Gtk.Widget:
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        box.add_css_class("chrome")
         seek_row = Gtk.Box(spacing=8)
         self.pos_label = Gtk.Label(label="0:00")
         self.pos_label.add_css_class("meta")
@@ -129,8 +178,10 @@ class PlayerWindow(Gtk.ApplicationWindow):
         self.seek.connect("value-changed", self._on_seek_value)
         click = Gtk.GestureClick()
         click.set_button(0)
+        click.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
         click.connect("pressed", lambda *_: self._seek.drag(self.seek.get_value()))
         click.connect("released", self._on_seek_release)
+        click.connect("cancel", self._on_seek_release)
         self.seek.add_controller(click)
         self.dur_label = Gtk.Label(label="0:00")
         self.dur_label.add_css_class("meta")
@@ -138,44 +189,66 @@ class PlayerWindow(Gtk.ApplicationWindow):
         seek_row.append(self.seek)
         seek_row.append(self.dur_label)
 
-        controls = Gtk.Box(spacing=6)
-        self.btn_prev = Gtk.Button(label="|<")
-        self.btn_play = Gtk.Button(label=">")
-        self.btn_stop = Gtk.Button(label="[]")
-        self.btn_next = Gtk.Button(label=">|")
-        self.btn_shuf = Gtk.ToggleButton(label="SHUF")
-        self.btn_rep = Gtk.ToggleButton(label="REP")
+        controls = Gtk.Box(spacing=2)
+        self.btn_prev = self._icon_button("media-skip-backward-symbolic", "Previous")
+        self.btn_play = self._icon_button("media-playback-start-symbolic", "Play")
+        self.btn_stop = self._icon_button("media-playback-stop-symbolic", "Stop")
+        self.btn_next = self._icon_button("media-skip-forward-symbolic", "Next")
+        self.btn_shuf = self._icon_button("media-playlist-shuffle-symbolic", "Shuffle", toggle=True)
+        self.btn_rep = self._icon_button("media-playlist-repeat-symbolic", "Repeat off", toggle=True)
+        self.btn_auto = self._icon_button("media-playlist-consecutive-symbolic", "Play similar after queue (off)", toggle=True)
+        self.btn_sleep = self._icon_button("alarm-symbolic", "Sleep timer off", toggle=True)
+        self.btn_sleep.connect("toggled", self._on_sleep_toggle)
         self.btn_prev.connect("clicked", lambda *_: self._cmd("prev"))
         self.btn_play.connect("clicked", lambda *_: self._cmd("toggle"))
         self.btn_stop.connect("clicked", lambda *_: self._cmd("stop"))
         self.btn_next.connect("clicked", lambda *_: self._cmd("next"))
         self.btn_shuf.connect("toggled", self._on_shuffle)
         self.btn_rep.connect("toggled", self._on_repeat)
-        for btn in (self.btn_prev, self.btn_play, self.btn_stop, self.btn_next, self.btn_shuf, self.btn_rep):
+        self.btn_auto.connect("toggled", self._on_automix)
+        for btn in (
+            self.btn_prev,
+            self.btn_play,
+            self.btn_stop,
+            self.btn_next,
+            self.btn_shuf,
+            self.btn_rep,
+            self.btn_auto,
+            self.btn_sleep,
+        ):
             controls.append(btn)
         vol_box = Gtk.Box(spacing=8, hexpand=True, halign=Gtk.Align.END)
-        vol_lab = Gtk.Label(label="VOL")
-        vol_lab.add_css_class("meta")
         self.volume = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 1)
         self.volume.set_draw_value(False)
-        self.volume.set_size_request(140, -1)
+        self.volume.set_size_request(120, -1)
+        self.volume.set_tooltip_text("Volume")
         self.volume.connect("value-changed", self._on_volume)
         self.vol_num = Gtk.Label(label="70")
         self.vol_num.add_css_class("meta")
-        vol_box.append(vol_lab)
         vol_box.append(self.volume)
         vol_box.append(self.vol_num)
         controls.append(vol_box)
+        box.append(top)
         box.append(seek_row)
         box.append(controls)
         return box
 
     def _tabs(self) -> Gtk.Widget:
         self.notebook = Gtk.Notebook()
+        self.notebook.add_css_class("player-tabs")
         self.notebook.set_vexpand(True)
-        self.notebook.append_page(self._queue_tab(), Gtk.Label(label="QUEUE"))
-        self.notebook.append_page(self._eq_tab(), Gtk.Label(label="EQUALIZER"))
-        self.notebook.append_page(self._music_tab(), Gtk.Label(label="MUSIC"))
+        self.notebook.append_page(self._queue_tab(), Gtk.Label(label="Queue"))
+        self.notebook.append_page(self._eq_tab(), Gtk.Label(label="Equalizer"))
+        self.notebook.append_page(self._music_tab(), Gtk.Label(label="Music"))
+        self.search_entry = Gtk.Entry()
+        self.search_entry.set_placeholder_text("search youtube music")
+        self.search_entry.set_size_request(260, -1)
+        self.search_entry.set_hexpand(False)
+        self.search_entry.add_css_class("tab-search")
+        self.search_entry.connect("activate", self._on_search)
+        self.notebook.set_action_widget(self.search_entry, Gtk.PackType.END)
+        self.search_entry.set_visible(True)
+        self.notebook.set_current_page(2)
         return self.notebook
 
     def _list(self) -> Gtk.ListBox:
@@ -184,40 +257,75 @@ class PlayerWindow(Gtk.ApplicationWindow):
         widget.set_activate_on_single_click(False)
         return widget
 
+    def _page(self) -> Gtk.Box:
+        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        page.add_css_class("tab-page")
+        page.set_hexpand(True)
+        page.set_vexpand(True)
+        page.set_margin_start(8)
+        page.set_margin_end(8)
+        return page
+
     def _queue_tab(self) -> Gtk.Widget:
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        hint = Gtk.Label(label="up next · enter / double-click to jump", xalign=1)
-        hint.add_css_class("hint")
-        hint.set_margin_end(10)
-        hint.set_margin_top(4)
+        page = self._page()
+        bar, _left, _right = caption_bar()
+        page.append(bar)
+        panes = Gtk.Box(spacing=8, vexpand=True)
+        left = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        left.set_hexpand(True)
         self.queue_empty = Gtk.Label(label="Queue is empty. Open MUSIC and press Enter on a song.")
         self.queue_empty.add_css_class("hint")
         self.queue_empty.set_margin_top(24)
         self.queue_list = self._list()
         self.queue_list.connect("row-activated", self._on_queue_activate)
-        scroll = Gtk.ScrolledWindow(vexpand=True)
-        scroll.set_child(self.queue_list)
-        box.append(hint)
-        box.append(self.queue_empty)
-        box.append(scroll)
-        return box
+        drop = Gtk.DropTarget.new(GObject.TYPE_STRING, Gdk.DragAction.MOVE)
+        drop.connect("drop", self._on_queue_drop)
+        self.queue_list.add_controller(drop)
+        self.queue_scroll = constrain_scroll(Gtk.ScrolledWindow())
+        self.queue_scroll.set_child(self.queue_list)
+        left.append(self.queue_empty)
+        left.append(self.queue_scroll)
+
+        right = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        right.set_hexpand(True)
+        self.lyrics_empty = Gtk.Label(label="no lyrics", xalign=0)
+        self.lyrics_empty.add_css_class("hint")
+        self.lyrics_empty.set_margin_start(8)
+        self.lyrics_empty.set_margin_top(8)
+        self.lyrics_list = self._list()
+        self.lyrics_list.add_css_class("lyrics")
+        self.lyrics_list.set_selection_mode(Gtk.SelectionMode.NONE)
+        self.lyrics_scroll = constrain_scroll(Gtk.ScrolledWindow())
+        self.lyrics_scroll.set_child(self.lyrics_list)
+        right.append(self.lyrics_empty)
+        right.append(self.lyrics_scroll)
+        panes.append(left)
+        panes.append(right)
+        page.append(panes)
+        return page
 
     def _eq_tab(self) -> Gtk.Widget:
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        box.set_margin_top(10)
-        box.set_margin_start(16)
-        box.set_margin_end(16)
-        presets = Gtk.Box(spacing=8)
+        page = self._page()
+        bar, _left, _right = caption_bar()
+        page.append(bar)
+        presets = Gtk.Box(spacing=6)
+        presets.set_margin_top(4)
+        presets.set_margin_bottom(16)
         self._eq_preset_btns: dict[str, Gtk.ToggleButton] = {}
         for label, name in EQ_PRESETS:
             btn = Gtk.ToggleButton(label=label)
+            btn.add_css_class("eq-preset")
             btn.connect("toggled", self._on_eq_preset, name)
             presets.append(btn)
             self._eq_preset_btns[name] = btn
+        page.append(presets)
         sliders = Gtk.Box(spacing=10, homogeneous=True, vexpand=True)
+        sliders.set_margin_start(8)
+        sliders.set_margin_end(8)
+        sliders.set_margin_bottom(20)
         self._eq_scales: list[Gtk.Scale] = []
         for label in EQ_LABELS:
-            col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+            col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
             val = Gtk.Label(label="0")
             val.add_css_class("meta")
             scale = Gtk.Scale.new_with_range(Gtk.Orientation.VERTICAL, -12, 12, 0.5)
@@ -233,63 +341,43 @@ class PlayerWindow(Gtk.ApplicationWindow):
             sliders.append(col)
             self._eq_scales.append(scale)
             scale._value_label = val  # type: ignore[attr-defined]
-        box.append(presets)
-        box.append(sliders)
-        return box
+        page.append(sliders)
+        return page
 
     def _music_tab(self) -> Gtk.Widget:
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        box.set_margin_top(8)
-        box.set_margin_start(8)
-        box.set_margin_end(8)
-        search_row = Gtk.Box(spacing=8)
-        self.search_entry = Gtk.Entry()
-        self.search_entry.set_placeholder_text("search youtube music")
-        self.search_entry.set_hexpand(True)
-        self.search_entry.connect("activate", self._on_search)
-        go = Gtk.Button(label="SEARCH")
-        go.connect("clicked", self._on_search)
-        search_row.append(self.search_entry)
-        search_row.append(go)
+        page = self._page()
+        bar, left, right = caption_bar()
+        playlists_lab = Gtk.Label(label="PLAYLISTS", xalign=0)
+        playlists_lab.add_css_class("meta")
+        self.tracks_label = Gtk.Label(label="TRACKS", xalign=0)
+        self.tracks_label.add_css_class("meta")
+        bind_ellipsize(self.tracks_label, 42)
+        left.append(playlists_lab)
+        right.append(self.tracks_label)
+        page.append(bar)
         panes = Gtk.Box(spacing=8, vexpand=True)
-        left = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        left_lab = Gtk.Label(label="PLAYLISTS", xalign=0)
-        left_lab.add_css_class("meta")
+        col_l = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        col_l.set_hexpand(True)
         self.playlist_list = self._list()
         self.playlist_list.connect("row-selected", self._on_playlist_selected)
         self.playlist_list.connect("row-activated", self._on_playlist_activated)
-        left_scroll = Gtk.ScrolledWindow(hexpand=True, vexpand=True)
+        pick = Gtk.GestureClick()
+        pick.connect("released", self._on_playlist_click)
+        self.playlist_list.add_controller(pick)
+        left_scroll = constrain_scroll(Gtk.ScrolledWindow())
         left_scroll.set_child(self.playlist_list)
-        left.append(left_lab)
-        left.append(left_scroll)
-        right = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        self.tracks_label = Gtk.Label(label="TRACKS  ·  enter / double-click to play", xalign=0)
-        self.tracks_label.add_css_class("meta")
+        col_l.append(left_scroll)
+        col_r = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        col_r.set_hexpand(True)
         self.track_list = self._list()
         self.track_list.connect("row-activated", self._on_track_activated)
-        right_scroll = Gtk.ScrolledWindow(hexpand=True, vexpand=True)
+        right_scroll = constrain_scroll(Gtk.ScrolledWindow())
         right_scroll.set_child(self.track_list)
-        right.append(self.tracks_label)
-        right.append(right_scroll)
-        panes.append(left)
-        panes.append(right)
-        box.append(search_row)
-        box.append(panes)
-        return box
-
-    def _footer(self) -> Gtk.Widget:
-        bar = Gtk.Box(spacing=16)
-        bar.add_css_class("footer")
-        self.codec = Gtk.Label(label="YT MUSIC", xalign=0)
-        self.codec.add_css_class("codec")
-        self.backend = Gtk.Label(label="mpv", xalign=0)
-        self.backend.add_css_class("meta")
-        self.footer_msg = Gtk.Label(label="space play · enter play · e eq · m music", hexpand=True)
-        self.footer_msg.add_css_class("hint")
-        bar.append(self.codec)
-        bar.append(self.backend)
-        bar.append(self.footer_msg)
-        return bar
+        col_r.append(right_scroll)
+        panes.append(col_l)
+        panes.append(col_r)
+        page.append(panes)
+        return page
 
     def _bind_keys(self) -> None:
         ctrl = Gtk.EventControllerKey()
@@ -297,6 +385,12 @@ class PlayerWindow(Gtk.ApplicationWindow):
         self.add_controller(ctrl)
 
     def _on_key(self, _c, keyval, _code, state) -> bool:
+        mods = state & Gtk.accelerator_get_default_mod_mask()
+        if mods & Gdk.ModifierType.CONTROL_MASK and keyval in (Gdk.KEY_q, Gdk.KEY_Q):
+            app = self.get_application()
+            if app is not None and hasattr(app, "quit_engine"):
+                app.quit_engine()
+            return True
         if self.search_entry.has_focus():
             return False
         if keyval == Gdk.KEY_space:
@@ -312,7 +406,9 @@ class PlayerWindow(Gtk.ApplicationWindow):
         if keyval in (Gdk.KEY_m, Gdk.KEY_M):
             self.notebook.set_current_page(2)
             return True
-        mods = state & Gtk.accelerator_get_default_mod_mask()
+        if keyval in (Gdk.KEY_q, Gdk.KEY_Q):
+            self.notebook.set_current_page(0)
+            return True
         if mods & Gdk.ModifierType.CONTROL_MASK and keyval in (Gdk.KEY_f, Gdk.KEY_F):
             self.notebook.set_current_page(2)
             self.search_entry.grab_focus()
@@ -324,12 +420,114 @@ class PlayerWindow(Gtk.ApplicationWindow):
         self._css.load_from_data(css_for(palette).encode())
         self.spectrum.set_palette(palette)
 
+    def _paint(self) -> None:
+        self._apply_palette(self._base_palette)
+
+    def _watch_theme(self) -> None:
+        seen: set[str] = set()
+        watch = [
+            *omarchy_colors_paths(),
+            omarchy_state_dir(),
+            omarchy_state_dir() / "theme",
+            omarchy_state_dir() / "theme.name",
+            omarchy_current_dir(),
+            omarchy_current_dir() / "theme",
+            Path.home() / ".config/omarchy/current",
+            Path.home() / ".config/omarchy/current/theme",
+        ]
+        for path in watch:
+            key = str(path)
+            if key in seen or not path.exists():
+                continue
+            seen.add(key)
+            monitor = Gio.File.new_for_path(key).monitor(Gio.FileMonitorFlags.WATCH_MOVES, None)
+            monitor.connect("changed", self._on_theme_changed)
+            self._theme_monitors.append(monitor)
+
+    def _on_theme_changed(self, *_a) -> None:
+        if self._theme_reload_id:
+            GLib.source_remove(self._theme_reload_id)
+        self._theme_reload_id = GLib.timeout_add(150, self._reload_theme)
+
+    def _reload_theme(self) -> bool:
+        self._theme_reload_id = 0
+        try:
+            self._base_palette = load_active_palette()
+            self._paint()
+        except (OSError, ValueError):
+            pass
+        return False
+
     def _bootstrap(self) -> bool:
-        self._async("loading playlists…", lambda: self.ipc.request({"cmd": "playlists"}, timeout=30), self._got_playlists)
+        self._async("", lambda: self.ipc.request({"cmd": "auth.status"}, timeout=8), self._got_auth)
+        return False
+
+    def _got_auth(self, payload, err) -> bool:
+        if err and "unknown command" in err.lower():
+            self._load_playlists()
+            return False
+        if err or (payload and payload.get("logged_in") is False):
+            self._show_login((payload or {}).get("error") or err or "")
+            self._set_account_tip(False, "")
+            return False
+        self._set_account_tip(True, (payload or {}).get("source") or "")
+        self._load_playlists()
+        return False
+
+    def _set_account_tip(self, logged_in: bool, source: str) -> None:
+        if not hasattr(self, "btn_account"):
+            return
+        if logged_in:
+            where = source.replace("firefox:", "").replace("chrome:", "") if source else "this computer"
+            self.btn_account.set_tooltip_text(f"Signed in · {where}")
+        else:
+            self.btn_account.set_tooltip_text("Sign in")
+
+    def _on_account(self, *_a) -> None:
+        if getattr(self, "login_veil", None) is not None and self.login_veil.get_visible():
+            return
+        self._dismiss_menu()
+        pop = Gtk.Popover()
+        pop.set_has_arrow(True)
+        pop.add_css_class("ctx-menu")
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        box.set_margin_start(10)
+        box.set_margin_end(10)
+        box.set_margin_top(8)
+        box.set_margin_bottom(8)
+        source = self.status.auth_source or "this computer"
+        lab = Gtk.Label(label=f"Signed in via {source}", xalign=0)
+        lab.add_css_class("meta")
+        lab.set_wrap(True)
+        box.append(lab)
+        out = Gtk.Button(label="Sign out")
+        out.add_css_class("flat")
+        out.connect("clicked", lambda *_: self._sign_out())
+        box.append(out)
+        pop.set_child(box)
+        pop.set_parent(self.btn_account)
+        pop.popup()
+        self._ctx_pop = pop
+
+    def _sign_out(self) -> None:
+        self._dismiss_menu()
+        self._async(
+            "signing out…",
+            lambda: self.ipc.request({"cmd": "auth.logout"}, timeout=8),
+            self._got_logout,
+        )
+
+    def _got_logout(self, payload, err) -> bool:
+        if err:
+            self._set_footer(err)
+            return False
+        self._set_account_tip(False, "")
+        self._show_login("Signed out. Click Sign in when you want this app to use the browser account.", watch=False)
         return False
 
     def _async(self, message, fn, done) -> None:
-        self._set_footer(message)
+        if message:
+            self._set_footer(message)
 
         def work() -> None:
             try:
@@ -342,54 +540,15 @@ class PlayerWindow(Gtk.ApplicationWindow):
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _got_playlists(self, payload, err) -> bool:
-        if err:
-            self._set_footer(err)
-            return False
-        self._playlists = parse_playlists(payload or {})
-        self._fill(self.playlist_list, [(p.name, "ytmusic", str(p.track_count or "")) for p in self._playlists])
-        self.subtitle.set_text(f"YouTube Music — {len(self._playlists)} playlists")
-        self._set_footer(f"{len(self._playlists)} playlists · click to browse · enter to play")
-        if self._playlists:
-            row = self.playlist_list.get_row_at_index(0)
-            if row:
-                self.playlist_list.select_row(row)
-        return False
-
-    def _fill(self, widget: Gtk.ListBox, rows: list[tuple[str, str, str]]) -> None:
-        self._clear(widget)
-        for left, mid, right in rows:
-            widget.append(self._row(left, mid, right))
-
     def _row(self, left: str, mid: str, right: str) -> Gtk.ListBoxRow:
-        row = Gtk.ListBoxRow()
-        box = Gtk.Box(spacing=12)
-        box.set_margin_start(8)
-        box.set_margin_end(8)
-        box.set_margin_top(5)
-        box.set_margin_bottom(5)
-        a = Gtk.Label(label=left, xalign=0, hexpand=True)
-        a.set_ellipsize(Pango.EllipsizeMode.END)
-        b = Gtk.Label(label=mid, xalign=0)
-        b.add_css_class("meta")
-        b.set_width_chars(12)
-        c = Gtk.Label(label=right, xalign=1)
-        c.add_css_class("meta")
-        box.append(a)
-        box.append(b)
-        box.append(c)
-        row.set_child(box)
-        return row
+        return make_row(left, mid, right)
 
     def _clear(self, widget: Gtk.ListBox) -> None:
-        child = widget.get_first_child()
-        while child is not None:
-            nxt = child.get_next_sibling()
-            widget.remove(child)
-            child = nxt
+        clear_list(widget)
 
     def _pump(self) -> None:
         last = 0.0
+        last_bands = 0.0
         while not self._pump_stop.is_set():
             try:
                 payload, timeout = self._cmd_q.get(timeout=0.05)
@@ -400,9 +559,20 @@ class PlayerWindow(Gtk.ApplicationWindow):
                     resp = self.ipc.request(payload, timeout=timeout, raise_on_error=False)
                     if not resp.get("ok", True):
                         GLib.idle_add(self._set_footer, resp.get("error") or "engine error")
+                    elif payload.get("cmd") == "playlist.add":
+                        GLib.idle_add(self._set_footer, "saved to playlist")
+                    elif payload.get("cmd") in {"track.play_next", "track.queue", "queue.move", "queue.remove", "track.mix"}:
+                        GLib.idle_add(self._refresh_queue)
                 except (OSError, EngineError) as exc:
                     GLib.idle_add(self._set_footer, str(exc))
             now = time.monotonic()
+            if now - last_bands >= 0.08:
+                try:
+                    raw = self.ipc.request({"cmd": "bands"}, timeout=0.8, raise_on_error=False)
+                    GLib.idle_add(self._on_bands, raw)
+                except OSError:
+                    pass
+                last_bands = now
             if now - last >= 0.25:
                 try:
                     raw = self.ipc.request({"cmd": "status"}, timeout=2.0, raise_on_error=False)
@@ -425,8 +595,12 @@ class PlayerWindow(Gtk.ApplicationWindow):
         self._apply_status()
         now = self.status.track.id if self.status.track else ""
         if now != prev:
-            self._refresh_queue()
             self._load_art(self.status.track)
+            self._load_lyrics(now)
+        sig = str(raw.get("queue_sig") or "")
+        if not self._dragging and sig and sig != self._queue_sig:
+            self._queue_sig = sig
+            self._refresh_queue()
         return False
 
     def _apply_status(self) -> None:
@@ -434,24 +608,40 @@ class PlayerWindow(Gtk.ApplicationWindow):
         self._syncing = True
         try:
             playing = st.state == "playing"
-            self.btn_play.set_label("||" if playing else ">")
+            self.btn_play.set_icon_name("media-playback-pause-symbolic" if playing else "media-playback-start-symbolic")
+            self.btn_play.set_tooltip_text("Pause" if playing else "Play")
             if st.track:
-                self.track_title.set_text(("▶ " if playing else "") + (st.track.title or "untitled"))
-                self.track_meta.set_text(f"{st.track.artist or 'unknown'} · {st.track.album or 'youtube music'}")
+                self.track_title.set_text(st.track.title or "untitled")
+                self.track_meta.set_text(f"{st.track.artist or 'unknown'} · {st.track.album or 'YouTube Music'}")
             else:
-                self.track_title.set_text("nothing playing")
-                self.track_meta.set_text("youtube music")
-            self.pos_label.set_text(format_time(st.position))
+                self.track_title.set_text("Nothing playing")
+                self.track_meta.set_text("YouTube Music")
+            self.pos_label.set_text(format_time(st.position) if self._seek.follow_status() else format_time(self.seek.get_value()))
             self.dur_label.set_text(format_time(st.duration))
-            if self._seek._pending is None:
-                self.seek.set_range(0, max(st.duration, 1))
+            self.seek.set_range(0, max(st.duration, 1))
+            if self._seek.follow_status():
                 self.seek.set_value(st.position)
             self.btn_shuf.set_active(st.shuffle)
             self.btn_rep.set_active(st.repeat != "off")
+            rep = {"off": "Repeat off", "all": "Repeat all", "one": "Repeat one"}.get(st.repeat, "Repeat")
+            self.btn_rep.set_tooltip_text(rep)
+            self.btn_auto.set_active(st.automix)
+            self.btn_auto.set_tooltip_text("Play similar after queue" + ("" if st.automix else " (off)"))
+            sleeping = st.sleep_remaining > 0
+            if not self._sleep_picking:
+                self.btn_sleep.set_active(sleeping)
+            if sleeping:
+                mins = max(1, (st.sleep_remaining + 59) // 60)
+                self.btn_sleep.set_tooltip_text(f"Sleep in {mins} min")
+            else:
+                self.btn_sleep.set_tooltip_text("Sleep timer off")
             self.volume.set_value(st.volume)
             self.vol_num.set_text(str(int(st.volume)))
-            if st.total:
-                self.subtitle.set_text(f"YouTube Music — {st.total} in queue")
+            self._set_account_tip(st.logged_in, st.auth_source)
+            if st.track:
+                self.set_title(st.track.title or "Music")
+            else:
+                self.set_title("Music")
             self._sync_eq(st)
         finally:
             self._syncing = False
@@ -475,32 +665,40 @@ class PlayerWindow(Gtk.ApplicationWindow):
             return
         tracks = parse_tracks(raw)
         index = int(raw.get("index") if raw.get("index") is not None else -1)
-        self._queue = tracks
-        self.queue_empty.set_visible(not tracks)
-        self._clear(self.queue_list)
-        for i, track in enumerate(tracks, start=1):
-            row = self._row(f"{i:02d}  {track.title}", track.artist, format_time(track.duration_secs))
-            if i - 1 == index:
-                row.add_css_class("current-track")
-            self.queue_list.append(row)
+        self._render_queue(tracks, index)
 
     def _on_seek_change(self, _s, _sc, value: float) -> bool:
         self._seek.drag(float(value))
         self.pos_label.set_text(format_time(value))
+        self._arm_seek_commit()
         return False
 
     def _on_seek_value(self, scale: Gtk.Scale) -> None:
-        if self._syncing or self._seek._pending is None:
+        if self._syncing:
             return
         self._seek.drag(scale.get_value())
         self.pos_label.set_text(format_time(scale.get_value()))
+        self._arm_seek_commit()
 
     def _on_seek_release(self, *_args) -> None:
         self._seek.drag(self.seek.get_value())
-        target = self._seek.release(current=self.status.position)
+        self._commit_seek(immediate=True)
+
+    def _arm_seek_commit(self) -> None:
+        if self._seek_timer:
+            GLib.source_remove(self._seek_timer)
+        self._seek_timer = GLib.timeout_add(130, self._commit_seek)
+
+    def _commit_seek(self, immediate: bool = False) -> bool:
+        timer = self._seek_timer
+        self._seek_timer = 0
+        if immediate and timer:
+            GLib.source_remove(timer)
+        target = self._seek.release() if immediate else self._seek.take_settled()
         if target is None:
-            return
+            return False
         self._queue_cmd({"cmd": "seek", "value": target})
+        return False
 
     def _on_volume(self, scale: Gtk.Scale) -> None:
         if self._syncing:
@@ -516,7 +714,64 @@ class PlayerWindow(Gtk.ApplicationWindow):
     def _on_repeat(self, btn: Gtk.ToggleButton) -> None:
         if self._syncing:
             return
-        self._queue_cmd({"cmd": "repeat", "name": "all" if btn.get_active() else "off"})
+        del btn
+        self._queue_cmd({"cmd": "repeat", "name": "cycle"})
+
+    def _on_automix(self, btn: Gtk.ToggleButton) -> None:
+        if self._syncing:
+            return
+        self._queue_cmd({"cmd": "automix", "name": "on" if btn.get_active() else "off"})
+
+    def _on_sleep_toggle(self, btn: Gtk.ToggleButton) -> None:
+        if self._syncing:
+            return
+        if not btn.get_active():
+            self._queue_cmd({"cmd": "sleep", "minutes": 0})
+            return
+        self._sleep_picking = True
+        pop = Gtk.Popover()
+        pop.set_has_arrow(True)
+        row = Gtk.Box(spacing=8)
+        row.set_margin_start(10)
+        row.set_margin_end(10)
+        row.set_margin_top(8)
+        row.set_margin_bottom(8)
+        lab = Gtk.Label(label="Minutes")
+        lab.add_css_class("meta")
+        spin = Gtk.SpinButton.new_with_range(1, 240, 5)
+        spin.set_value(self._sleep_minutes)
+        go = Gtk.Button(label="Start")
+        go.add_css_class("flat")
+
+        def start(*_a) -> None:
+            self._sleep_minutes = int(spin.get_value())
+            self._queue_cmd({"cmd": "sleep", "minutes": self._sleep_minutes})
+            self._sleep_picking = False
+            pop.popdown()
+
+        def closed(*_a) -> None:
+            self._sleep_picking = False
+            if self.status.sleep_remaining <= 0:
+                self._sync_sleep_off()
+
+        go.connect("clicked", start)
+        spin.connect("activate", start)
+        row.append(lab)
+        row.append(spin)
+        row.append(go)
+        pop.set_child(row)
+        pop.set_parent(btn)
+        pop.connect("closed", closed)
+        pop.popup()
+        spin.grab_focus()
+
+    def _sync_sleep_off(self) -> None:
+        if self._syncing:
+            return
+        if self.status.sleep_remaining <= 0 and self.btn_sleep.get_active():
+            self._syncing = True
+            self.btn_sleep.set_active(False)
+            self._syncing = False
 
     def _on_eq_preset(self, btn: Gtk.ToggleButton, name: str) -> None:
         if self._eq_sending or not btn.get_active():
@@ -533,77 +788,352 @@ class PlayerWindow(Gtk.ApplicationWindow):
     def _on_queue_activate(self, _l, row: Gtk.ListBoxRow) -> None:
         self._queue_cmd({"cmd": "queue.play", "index": row.get_index()})
 
-    def _on_playlist_selected(self, _l, row: Gtk.ListBoxRow | None) -> None:
-        if row is None or self._search_tracks is not None:
+    def _render_queue(self, tracks: list[Track], index: int) -> None:
+        old_ids = [t.id for t in self._queue]
+        new_ids = [t.id for t in tracks]
+        self._queue = tracks
+        self.queue_empty.set_visible(not tracks)
+        if not queue_needs_rebuild(old_ids, new_ids) and self.queue_list.get_first_child() is not None:
+            self._mark_current_row(index)
             return
-        idx = row.get_index()
-        if idx >= len(self._playlists):
+        selected = self.queue_list.get_selected_row()
+        sel_idx = selected.get_index() if selected is not None else None
+        adj = self.queue_scroll.get_vadjustment()
+        pos = adj.get_value() if adj is not None else 0.0
+        self._clear(self.queue_list)
+        for i, track in enumerate(tracks, start=1):
+            row = self._row(f"{i:02d}  {track.title}", track.artist, format_time(track.duration_secs))
+            if i - 1 == index:
+                row.add_css_class("current-track")
+            self._bind_song_menu(row, track, source="queue")
+            self._bind_queue_drag(row)
+            self.queue_list.append(row)
+
+        def restore() -> bool:
+            if adj is not None:
+                adj.set_value(pos)
+            if sel_idx is not None:
+                keep = self.queue_list.get_row_at_index(sel_idx)
+                if keep is not None:
+                    self.queue_list.select_row(keep)
+            return False
+
+        GLib.idle_add(restore)
+
+    def _mark_current_row(self, index: int) -> None:
+        row = self.queue_list.get_first_child()
+        i = 0
+        while row is not None:
+            if isinstance(row, Gtk.ListBoxRow):
+                if i == index:
+                    row.add_css_class("current-track")
+                else:
+                    row.remove_css_class("current-track")
+                i += 1
+            row = row.get_next_sibling()
+
+    def _on_bands(self, raw: dict | None) -> bool:
+        bands = [float(x) for x in (raw.get("bands") or [])] if raw and raw.get("ok") else []
+        if self.status.state != "playing":
+            bands = [0.0] * 10
+        self.spectrum.set_bands(bands)
+        return False
+
+    def _bind_song_menu(self, row: Gtk.ListBoxRow, track: Track, *, source: str) -> None:
+        click = Gtk.GestureClick()
+        click.set_button(Gdk.BUTTON_SECONDARY)
+        click.connect("pressed", lambda g, *_a: self._show_song_menu(row, track, source, g))
+        row.add_controller(click)
+
+    def _dismiss_menu(self) -> None:
+        if self._ctx_pop is not None:
+            self._ctx_pop.popdown()
+            self._ctx_pop.unparent()
+            self._ctx_pop = None
+
+    def _menu_button(self, label: str, on_click) -> Gtk.Button:
+        btn = Gtk.Button(label=label)
+        btn.set_halign(Gtk.Align.FILL)
+        btn.set_hexpand(True)
+        btn.connect("clicked", lambda *_: on_click())
+        return btn
+
+    def _fill_song_menu(self, pop: Gtk.Popover, row: Gtk.ListBoxRow, track: Track, source: str) -> None:
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
+
+        def run(fn) -> None:
+            self._dismiss_menu()
+            fn()
+
+        for label in song_menu_actions(source):
+            if label == "Start mix":
+                box.append(self._menu_button(label, lambda: run(lambda: self._start_mix(track))))
+            elif label == "Play next":
+                box.append(self._menu_button(label, lambda: run(lambda: self._play_next(track))))
+            elif label == "Add to queue":
+                box.append(self._menu_button(label, lambda: run(lambda: self._add_to_queue(track))))
+            elif label == "Save this track…":
+                box.append(self._menu_button(label, lambda: self._show_save_menu(pop, row, track, source)))
+            elif label == "Save entire queue…":
+                box.append(self._menu_button(label, lambda: self._show_save_queue_menu(pop, row, track, source)))
+            elif label == "Remove":
+                box.append(self._menu_button(label, lambda: run(lambda: self._remove_from_queue(row.get_index()))))
+        pop.set_child(box)
+
+    def _show_song_menu(self, row: Gtk.ListBoxRow, track: Track, source: str, gesture: Gtk.GestureClick) -> None:
+        self._dismiss_menu()
+        pop = Gtk.Popover()
+        pop.set_has_arrow(False)
+        pop.add_css_class("ctx-menu")
+        self._fill_song_menu(pop, row, track, source)
+        pop.set_parent(row)
+        pop.popup()
+        self._ctx_pop = pop
+        gesture.set_state(Gtk.EventSequenceState.CLAIMED)
+
+    def _show_save_menu(self, pop: Gtk.Popover, row: Gtk.ListBoxRow, track: Track, source: str) -> None:
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
+        box.append(
+            self._menu_button(
+                "← Back",
+                lambda: self._restore_song_menu(pop, row, track, source),
+            )
+        )
+        if not self._playlists:
+            lab = Gtk.Label(label="no playlists loaded")
+            lab.add_css_class("hint")
+            lab.set_margin_top(6)
+            lab.set_margin_bottom(6)
+            box.append(lab)
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroll.set_min_content_height(80)
+        scroll.set_max_content_height(240)
+        scroll.set_propagate_natural_height(True)
+        inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
+        for plist in self._playlists:
+            inner.append(
+                self._menu_button(
+                    plist.name,
+                    lambda p=plist: self._save_to_playlist(p, track),
+                )
+            )
+        scroll.set_child(inner)
+        box.append(scroll)
+        pop.set_child(box)
+
+    def _restore_song_menu(self, pop: Gtk.Popover, row: Gtk.ListBoxRow, track: Track, source: str) -> None:
+        self._fill_song_menu(pop, row, track, source)
+
+    def _start_mix(self, track: Track) -> None:
+        self.notebook.set_current_page(0)
+        self._queue_cmd({"cmd": "track.mix", "track": track.to_ipc()}, timeout=40)
+
+    def _play_next(self, track: Track) -> None:
+        self._queue_cmd({"cmd": "track.play_next", "track": track.to_ipc()})
+
+    def _add_to_queue(self, track: Track) -> None:
+        self._queue_cmd({"cmd": "track.queue", "track": track.to_ipc()})
+
+    def _remove_from_queue(self, index: int) -> None:
+        self._queue_cmd({"cmd": "queue.remove", "index": index})
+
+    def _save_to_playlist(self, plist: PlaylistInfo, track: Track) -> None:
+        self._dismiss_menu()
+        self._set_footer(f"saving {track.title} → {plist.name}…")
+        self._queue_cmd({"cmd": "playlist.add", "playlist_id": plist.id, "video_id": track.id})
+
+    def _show_save_queue_menu(self, pop: Gtk.Popover, row: Gtk.ListBoxRow, track: Track, source: str) -> None:
+        self._fill_save_queue_new(pop, row, track, source).grab_focus()
+
+    def _fill_save_queue_new(self, pop: Gtk.Popover, row: Gtk.ListBoxRow, track: Track, source: str) -> Gtk.Entry:
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        box.set_margin_start(10)
+        box.set_margin_end(10)
+        box.set_margin_top(8)
+        box.set_margin_bottom(8)
+        box.append(self._menu_button("← Back", lambda: self._restore_song_menu(pop, row, track, source)))
+        lab = Gtk.Label(label="New playlist", xalign=0)
+        lab.add_css_class("meta")
+        entry = Gtk.Entry()
+        entry.set_text(default_queue_playlist_name())
+        entry.set_placeholder_text("playlist name")
+        create = Gtk.Button(label="Create playlist")
+        create.add_css_class("flat")
+
+        def create_now(*_a) -> None:
+            name = entry.get_text().strip()
+            self._dismiss_menu()
+            self._save_queue({"name": name} if name else {"name": default_queue_playlist_name()})
+
+        create.connect("clicked", create_now)
+        entry.connect("activate", create_now)
+        existing = Gtk.Button(label="Add to existing…")
+        existing.add_css_class("flat")
+        existing.connect("clicked", lambda *_: self._fill_save_queue_existing(pop, row, track, source))
+        box.append(lab)
+        box.append(entry)
+        box.append(create)
+        box.append(existing)
+        pop.set_child(box)
+        return entry
+
+    def _fill_save_queue_existing(self, pop: Gtk.Popover, row: Gtk.ListBoxRow, track: Track, source: str) -> None:
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
+        box.append(
+            self._menu_button(
+                "← New playlist",
+                lambda: self._fill_save_queue_new(pop, row, track, source).grab_focus(),
+            )
+        )
+        if not self._playlists:
+            lab = Gtk.Label(label="no playlists loaded")
+            lab.add_css_class("hint")
+            lab.set_margin_top(6)
+            lab.set_margin_bottom(6)
+            box.append(lab)
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroll.set_min_content_height(80)
+        scroll.set_max_content_height(240)
+        scroll.set_propagate_natural_height(True)
+        inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
+        for plist in self._playlists:
+            inner.append(
+                self._menu_button(
+                    plist.name,
+                    lambda p=plist: self._save_queue({"playlist_id": p.id, "name": p.name}),
+                )
+            )
+        scroll.set_child(inner)
+        box.append(scroll)
+        pop.set_child(box)
+
+    def _save_queue(self, payload: dict) -> None:
+        self._dismiss_menu()
+        if not self._queue:
+            self._set_footer("queue is empty")
             return
-        plist = self._playlists[idx]
-        self.tracks_label.set_text(f"{plist.name.upper()}  ·  enter / double-click to play")
+        label = payload.get("name") or "playlist"
         self._async(
-            f"loading {plist.name}…",
-            lambda: self.ipc.request({"cmd": "playlist.tracks", "id": plist.id}, timeout=40),
-            self._got_tracks,
+            f"saving queue → {label}…",
+            lambda: self.ipc.request({"cmd": "queue.save", **payload}, timeout=60),
+            lambda result, err: self._got_queue_save(result, err, label),
         )
 
-    def _got_tracks(self, payload, err) -> bool:
+    def _got_queue_save(self, payload, err, label: str) -> bool:
         if err:
             self._set_footer(err)
             return False
-        self._lib_tracks = parse_tracks(payload or {})
-        if self._search_tracks is None:
-            self._render_tracks(self._lib_tracks)
-        self._set_footer(f"{len(self._lib_tracks)} tracks")
+        total = int((payload or {}).get("total") or 0)
+        name = (payload or {}).get("name") or label
+        self._set_footer(f"saved {total} tracks → {name}")
+        if (payload or {}).get("created"):
+            self._load_playlists()
         return False
 
-    def _render_tracks(self, tracks: list[Track]) -> None:
-        self._fill(
-            self.track_list,
-            [(f"{i:02d}  {t.title}", t.artist, format_time(t.duration_secs)) for i, t in enumerate(tracks, start=1)],
-        )
+    def _bind_queue_drag(self, row: Gtk.ListBoxRow) -> None:
+        source = Gtk.DragSource()
+        source.set_actions(Gdk.DragAction.MOVE)
+        source.connect("prepare", lambda *_a: self._on_drag_prepare(row))
+        source.connect("drag-begin", lambda *_a: self._mark_dragging(True))
+        source.connect("drag-end", lambda *_a: self._mark_dragging(False))
+        row.add_controller(source)
 
-    def _on_playlist_activated(self, _l, row: Gtk.ListBoxRow) -> None:
-        idx = row.get_index()
-        if idx >= len(self._playlists):
-            return
-        plist = self._playlists[idx]
-        self._set_footer(f"starting {plist.name}…")
-        self._queue_cmd({"cmd": "playlist.play", "id": plist.id}, timeout=40)
+    def _on_drag_prepare(self, row: Gtk.ListBoxRow):
+        self._drag_from = row.get_index()
+        self._mark_dragging(True)
+        return Gdk.ContentProvider.new_for_value(str(self._drag_from))
 
-    def _on_track_activated(self, _l, row: Gtk.ListBoxRow) -> None:
-        tracks = self._search_tracks if self._search_tracks is not None else self._lib_tracks
-        idx = row.get_index()
-        if idx >= len(tracks):
-            return
-        track = tracks[idx]
-        self._set_footer(f"starting {track.title}…")
-        self._queue_cmd({"cmd": "track.play", "track": track.to_ipc()}, timeout=30)
+    def _mark_dragging(self, active: bool) -> None:
+        self._dragging = active
+        if not active:
+            self._drag_from = None
 
-    def _on_search(self, *_a) -> None:
-        query = self.search_entry.get_text().strip()
-        if not query:
-            self._search_tracks = None
-            self._render_tracks(self._lib_tracks)
-            return
-        self.tracks_label.set_text(f"SEARCH · {query}")
-        self._async(
-            f"searching {query}…",
-            lambda: self.ipc.request({"cmd": "search", "query": query, "limit": 20}, timeout=20),
-            self._got_search,
-        )
-
-    def _got_search(self, payload, err) -> bool:
-        if err:
-            self._set_footer(err)
+    def _on_queue_drop(self, _target, _value, _x, y: float) -> bool:
+        src = self._drag_from
+        self._mark_dragging(False)
+        if src is None:
             return False
-        self._search_tracks = parse_tracks(payload or {})
-        self._render_tracks(self._search_tracks)
-        self._set_footer(f"{len(self._search_tracks)} results")
-        return False
+        dest_row = self.queue_list.get_row_at_y(int(y))
+        dest = dest_row.get_index() if dest_row is not None else len(self._queue) - 1
+        if dest < 0 or dest == src:
+            return True
+        self._queue_cmd({"cmd": "queue.move", "from": src, "to": dest})
+        item = self._queue.pop(src)
+        self._queue.insert(dest, item)
+        current = self.status.index
+        if current == src:
+            current = dest
+        elif src < current <= dest:
+            current -= 1
+        elif dest <= current < src:
+            current += 1
+        self._render_queue(self._queue, current)
+        return True
 
     def _set_footer(self, text: str) -> None:
-        self.footer_msg.set_text(text)
+        if text and is_login_error(text):
+            self._show_login(text)
+            return
+        if text and any(token in text.lower() for token in ("error", "fail", "died", "cookie")):
+            self.set_title(text)
+
+    def _show_lyrics(self, lines: list[dict], *, found: bool) -> None:
+        self._lyric_lines = list(lines or [])
+        self._clear(self.lyrics_list)
+        for row in self._lyric_lines:
+            text = str(row.get("text") or "")
+            lab = Gtk.Label(label=text if text else " ", xalign=0)
+            lab.set_wrap(True)
+            lab.add_css_class("lyric-line")
+            item = Gtk.ListBoxRow()
+            item.set_activatable(False)
+            item.set_selectable(False)
+            item.set_child(lab)
+            self.lyrics_list.append(item)
+        has = bool(found and self._lyric_lines)
+        self.lyrics_list.set_visible(has)
+        self.lyrics_empty.set_text("no lyrics")
+        self.lyrics_empty.set_visible(not has)
+
+    def _load_lyrics(self, track_id: str) -> None:
+        tid = (track_id or "").strip()
+        if not tid:
+            self._lyrics_id = ""
+            self._show_lyrics([], found=False)
+            return
+        if tid == self._lyrics_id and self._lyric_lines:
+            return
+        self._lyrics_id = tid
+        self._lyrics_token += 1
+        token = self._lyrics_token
+        self.lyrics_empty.set_text("…")
+        self.lyrics_empty.set_visible(True)
+        self.lyrics_list.set_visible(False)
+        self._async(
+            "",
+            lambda: self.ipc.request({"cmd": "lyrics", "id": tid}, timeout=20),
+            lambda payload, err: self._got_lyrics(token, payload, err),
+        )
+
+    def _got_lyrics(self, token: int, payload, err) -> bool:
+        if token != self._lyrics_token:
+            return False
+        if err:
+            if is_login_error(err):
+                self._set_footer(err)
+            self._show_lyrics([], found=False)
+            return False
+        if not payload or not payload.get("ok"):
+            self._show_lyrics([], found=False)
+            return False
+        raw_lines = payload.get("lines") or []
+        lines = [{"text": str(row.get("text") or ""), "start": row.get("start")} for row in raw_lines if isinstance(row, dict)]
+        if not lines and payload.get("text"):
+            lines = [{"text": part, "start": None} for part in str(payload.get("text")).split("\n")]
+        self._show_lyrics(lines, found=bool(payload.get("found")))
+        return False
 
     def _load_art(self, track: Track | None) -> None:
         self._art_token += 1
@@ -622,7 +1152,7 @@ class PlayerWindow(Gtk.ApplicationWindow):
                 loader.close()
                 pix = loader.get_pixbuf()
                 if pix is not None:
-                    pix = pix.scale_simple(88, 88, GdkPixbuf.InterpType.BILINEAR)
+                    pix = pix.scale_simple(ART_SIZE, ART_SIZE, GdkPixbuf.InterpType.BILINEAR)
             except Exception:
                 pix = None
             GLib.idle_add(self._set_art, token, pix)
@@ -630,7 +1160,9 @@ class PlayerWindow(Gtk.ApplicationWindow):
         threading.Thread(target=work, daemon=True).start()
 
     def _set_art(self, token: int, pix) -> bool:
-        if token != self._art_token or pix is None:
+        if token != self._art_token:
+            return False
+        if pix is None:
             return False
         self.art.set_pixbuf(pix)
         return False

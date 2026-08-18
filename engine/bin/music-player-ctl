@@ -1,0 +1,13 @@
+#!/usr/bin/env node
+import { runCtl } from "../src/ctl.js";
+
+const argv = process.argv.slice(2);
+runCtl(argv)
+  .then(({ code, out }) => {
+    process.stdout.write(out);
+    process.exit(code);
+  })
+  .catch((err) => {
+    process.stderr.write(`${err.message || err}\n`);
+    process.exit(2);
+  });

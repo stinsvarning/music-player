@@ -6,3 +6,7 @@ dist/
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm
+.grok/
+.pytest_cache/
+*.egg-info/
+

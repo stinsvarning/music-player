@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "llurd.music",
+  "name": "Music",
+  "version": "1.0.0",
+  "author": "llurd",
+  "license": "MIT",
+  "description": "Now-playing chip that opens the Music player window.",
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Music",
+    "description": "Show the current track and open the Music window.",
+    "category": "Media",
+    "allowMultiple": false,
+    "defaultSection": "center"
+  }
+}

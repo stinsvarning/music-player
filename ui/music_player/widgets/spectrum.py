@@ -15,7 +15,7 @@ class SpectrumView(Gtk.DrawingArea):
     def __init__(self) -> None:
         super().__init__()
         self.set_hexpand(True)
-        self.set_content_height(78)
+        self.set_content_height(44)
         self._bars = [0.0] * 36
         self._peaks = [0.0] * 36
         self.palette: Palette = palette_named("mint")
@@ -46,27 +46,27 @@ class SpectrumView(Gtk.DrawingArea):
         n = len(self._bars)
         if n == 0 or width <= 0 or height <= 0:
             return
-        gap = 2.0
+        gap = 1.6
         bar_w = max(3.0, (width - gap * (n + 1)) / n)
-        segments = 12
-        seg_h = max(2.0, (height - 8) / segments - 1.4)
+        segments = 10
+        seg_h = max(2.0, (height - 6) / segments - 1.1)
         accent = self._hex(self.palette.accent)
         peak_c = self._hex(self.palette.peak)
-        muted = self._hex(self.palette.muted)
         for i, value in enumerate(self._bars):
             x = gap + i * (bar_w + gap)
             lit = int(round(value * (segments - 1)))
             peak_seg = int(round(self._peaks[i] * (segments - 1)))
             for s in range(segments):
-                y = height - 4 - (s + 1) * (seg_h + 1.4)
+                y = height - 3 - (s + 1) * (seg_h + 1.1)
                 if s <= lit:
                     if s >= segments - 2:
                         cr.set_source_rgb(*peak_c)
                     else:
-                        cr.set_source_rgb(*accent)
+                        t = 0.55 + 0.45 * (s / max(1, segments - 1))
+                        cr.set_source_rgb(accent[0] * t, accent[1] * t, accent[2] * t)
                 elif s == peak_seg:
                     cr.set_source_rgb(*peak_c)
                 else:
-                    cr.set_source_rgba(*muted, 0.32)
+                    cr.set_source_rgba(*accent, 0.10)
                 cr.rectangle(x, y, bar_w, seg_h)
                 cr.fill()
