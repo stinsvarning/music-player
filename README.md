@@ -30,7 +30,7 @@ Works on **Omarchy** and other Arch-family systems including **CachyOS**. The ba
 - Node 22+ (`nodejs`, `npm`)
 - mpv
 - GTK4 / PyGObject (`python-gobject`, `gtk4`)
-- `sqlite` (Firefox / Zen cookies) and `yt-dlp` (Chromium / Chrome cookies)
+- `sqlite` (Firefox / Zen cookies) and `yt-dlp` (Chromium, Chrome, Brave, Edge, Vivaldi)
 - A browser on this machine signed into [YouTube Music](https://music.youtube.com)
 
 Premium quality is used when that browser session has it.

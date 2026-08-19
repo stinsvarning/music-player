@@ -44,9 +44,9 @@ export function defaultBrowserCandidates(home) {
     { browser: "firefox", profileDir: path.join(root, ".librewolf") },
     { browser: "chrome", profileDir: path.join(root, ".config/google-chrome") },
     { browser: "chromium", profileDir: path.join(root, ".config/chromium") },
-    { browser: "chrome", profileDir: path.join(root, ".config/BraveSoftware/Brave-Browser") },
-    { browser: "chrome", profileDir: path.join(root, ".config/microsoft-edge") },
-    { browser: "chrome", profileDir: path.join(root, ".config/vivaldi") },
+    { browser: "brave", profileDir: path.join(root, ".config/BraveSoftware/Brave-Browser") },
+    { browser: "edge", profileDir: path.join(root, ".config/microsoft-edge") },
+    { browser: "vivaldi", profileDir: path.join(root, ".config/vivaldi") },
     { browser: "chrome", profileDir: path.join(root, ".config/helium") },
   ];
 }
@@ -173,8 +173,16 @@ export function cookieScanHint(home) {
   const haveYtdlp = commandOnPath("yt-dlp");
   const haveSqlite = commandOnPath("sqlite3");
   const bits = [];
-  if (fs.existsSync(path.join(homeDir, ".config/chromium")) && !haveYtdlp) {
-    bits.push("Chromium needs yt-dlp (pacman -S yt-dlp)");
+  const chromiumFamily = [
+    ".config/chromium",
+    ".config/google-chrome",
+    ".config/BraveSoftware/Brave-Browser",
+    ".config/microsoft-edge",
+    ".config/vivaldi",
+    ".config/helium",
+  ];
+  if (chromiumFamily.some((dir) => fs.existsSync(path.join(homeDir, dir))) && !haveYtdlp) {
+    bits.push("Chrome-based browsers need yt-dlp (pacman -S yt-dlp)");
   }
   if (
     fs.existsSync(path.join(homeDir, ".mozilla/firefox")) &&

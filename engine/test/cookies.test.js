@@ -146,6 +146,15 @@ test("defaultBrowserCandidates names Chromium as chromium not chrome", () => {
   assert.equal(chrome.browser, "chrome");
 });
 
+test("defaultBrowserCandidates names Brave Edge and Vivaldi for yt-dlp", () => {
+  const list = defaultBrowserCandidates("/home/someone");
+  const byDir = Object.fromEntries(list.map((c) => [c.profileDir, c.browser]));
+  assert.equal(byDir["/home/someone/.config/BraveSoftware/Brave-Browser"], "brave");
+  assert.equal(byDir["/home/someone/.config/microsoft-edge"], "edge");
+  assert.equal(byDir["/home/someone/.config/vivaldi"], "vivaldi");
+  assert.equal(byDir["/home/someone/.config/google-chrome"], "chrome");
+});
+
 test("resolveCookies uses the Firefox profile marked default in profiles.ini", () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "music-ff-ini-"));
   const root = path.join(home, ".mozilla", "firefox");
