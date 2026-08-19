@@ -43,7 +43,7 @@ export function defaultBrowserCandidates(home) {
     { browser: "firefox", profileDir: path.join(root, ".var/app/org.mozilla.firefox/.mozilla/firefox") },
     { browser: "firefox", profileDir: path.join(root, ".librewolf") },
     { browser: "chrome", profileDir: path.join(root, ".config/google-chrome") },
-    { browser: "chrome", profileDir: path.join(root, ".config/chromium") },
+    { browser: "chromium", profileDir: path.join(root, ".config/chromium") },
     { browser: "chrome", profileDir: path.join(root, ".config/BraveSoftware/Brave-Browser") },
     { browser: "chrome", profileDir: path.join(root, ".config/microsoft-edge") },
     { browser: "chrome", profileDir: path.join(root, ".config/vivaldi") },
@@ -155,6 +155,40 @@ function netscapeToHeader(text) {
   return parts.join("; ");
 }
 
+function commandOnPath(bin) {
+  return (process.env.PATH || "").split(path.delimiter).some((dir) => {
+    if (!dir) {
+      return false;
+    }
+    try {
+      return fs.existsSync(path.join(dir, bin));
+    } catch {
+      return false;
+    }
+  });
+}
+
+export function cookieScanHint(home) {
+  const homeDir = home || os.homedir();
+  const haveYtdlp = commandOnPath("yt-dlp");
+  const haveSqlite = commandOnPath("sqlite3");
+  const bits = [];
+  if (fs.existsSync(path.join(homeDir, ".config/chromium")) && !haveYtdlp) {
+    bits.push("Chromium needs yt-dlp (pacman -S yt-dlp)");
+  }
+  if (
+    fs.existsSync(path.join(homeDir, ".mozilla/firefox")) &&
+    !haveSqlite &&
+    !haveYtdlp
+  ) {
+    bits.push("Firefox needs sqlite or yt-dlp (pacman -S sqlite yt-dlp)");
+  }
+  if (bits.length) {
+    return `${LOGIN_REQUIRED}. ${bits.join(". ")}.`;
+  }
+  return LOGIN_REQUIRED;
+}
+
 export function resolveCookies({ spec, home, savedPath, readSaved, readBrowser, skipSaved = false } = {}) {
   const homeDir = home || os.homedir();
   const saved = savedPath || "";
@@ -199,7 +233,7 @@ export function resolveCookies({ spec, home, savedPath, readSaved, readBrowser, 
       }
     }
   }
-  return { header: "", source: "" };
+  return { header: "", source: "", error: cookieScanHint(homeDir) };
 }
 
 export function readCookieHeader(spec) {
@@ -214,15 +248,19 @@ export function defaultSavedPath(home = os.homedir()) {
 function readBrowserSpec(spec, home = os.homedir()) {
   const { browser, profileDir } = parseCookiesFrom(spec, home);
   if (browser === "firefox" || browser === "zen" || browser === "librewolf") {
-    const fromDb = fromSqlite(profileDir);
-    if (hasYoutubeSession(fromDb)) {
-      return fromDb;
+    try {
+      const fromDb = fromSqlite(profileDir);
+      if (hasYoutubeSession(fromDb)) {
+        return fromDb;
+      }
+    } catch {
+      /* missing sqlite3 — fall through to yt-dlp */
     }
   }
   return fromYtdlpDump(spec, home);
 }
 
-function findProfile(profileDir) {
+export function firefoxDefaultProfile(profileDir) {
   if (!profileDir || !fs.existsSync(profileDir)) {
     return "";
   }
@@ -230,6 +268,66 @@ function findProfile(profileDir) {
   if (fs.existsSync(direct)) {
     return profileDir;
   }
+  const fromIni = profileFromIni(profileDir);
+  if (fromIni && fs.existsSync(path.join(fromIni, "cookies.sqlite"))) {
+    return fromIni;
+  }
+  return firstCookiesProfile(profileDir);
+}
+
+function profileFromIni(profileDir) {
+  const iniPath = path.join(profileDir, "profiles.ini");
+  if (!fs.existsSync(iniPath)) {
+    return "";
+  }
+  const sections = [];
+  let current = { name: "", keys: {} };
+  for (const raw of fs.readFileSync(iniPath, "utf8").split(/\r?\n/)) {
+    const line = raw.trim();
+    const heading = line.match(/^\[(.+)]$/);
+    if (heading) {
+      if (current.name) {
+        sections.push(current);
+      }
+      current = { name: heading[1], keys: {} };
+      continue;
+    }
+    const eq = line.indexOf("=");
+    if (eq > 0) {
+      current.keys[line.slice(0, eq).trim()] = line.slice(eq + 1).trim();
+    }
+  }
+  if (current.name) {
+    sections.push(current);
+  }
+  const resolve = (rel, isRelative) => {
+    if (!rel) {
+      return "";
+    }
+    if (isRelative === "0" || path.isAbsolute(rel)) {
+      return rel;
+    }
+    return path.join(profileDir, rel);
+  };
+  for (const section of sections) {
+    if (/^Install/i.test(section.name) && section.keys.Default) {
+      return resolve(section.keys.Default, "1");
+    }
+  }
+  for (const section of sections) {
+    if (/^Profile/i.test(section.name) && section.keys.Default === "1" && section.keys.Path) {
+      return resolve(section.keys.Path, section.keys.IsRelative);
+    }
+  }
+  for (const section of sections) {
+    if (/^Profile/i.test(section.name) && section.keys.Path) {
+      return resolve(section.keys.Path, section.keys.IsRelative);
+    }
+  }
+  return "";
+}
+
+function firstCookiesProfile(profileDir) {
   const entries = fs.readdirSync(profileDir, { withFileTypes: true });
   for (const ent of entries) {
     if (!ent.isDirectory()) {
@@ -241,6 +339,10 @@ function findProfile(profileDir) {
     }
   }
   return "";
+}
+
+function findProfile(profileDir) {
+  return firefoxDefaultProfile(profileDir);
 }
 
 function fromSqlite(profileDir) {

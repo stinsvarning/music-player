@@ -30,6 +30,7 @@ Works on **Omarchy** and other Arch-family systems including **CachyOS**. The ba
 - Node 22+ (`nodejs`, `npm`)
 - mpv
 - GTK4 / PyGObject (`python-gobject`, `gtk4`)
+- `sqlite` (Firefox / Zen cookies) and `yt-dlp` (Chromium / Chrome cookies)
 - A browser on this machine signed into [YouTube Music](https://music.youtube.com)
 
 Premium quality is used when that browser session has it.
@@ -56,7 +57,7 @@ Or a user-local install without pacman:
 ```bash
 git clone https://github.com/stinsvarning/music-player.git
 cd music-player
-sudo pacman -S --needed python-gobject gtk4 mpv nodejs npm
+sudo pacman -S --needed python-gobject gtk4 mpv nodejs npm sqlite yt-dlp
 ./packaging/install.sh --no-extras --prefix ~/.local
 ```
 
@@ -69,7 +70,7 @@ Same steps, but keep the extras:
 ```bash
 git clone https://github.com/stinsvarning/music-player.git
 cd music-player
-sudo pacman -S --needed python-gobject gtk4 mpv nodejs npm
+sudo pacman -S --needed python-gobject gtk4 mpv nodejs npm sqlite yt-dlp
 ./packaging/install.sh --prefix ~/.local
 ```
 

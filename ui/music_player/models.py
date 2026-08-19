@@ -302,6 +302,18 @@ def current_lyric_index(lines: list[dict] | None, position: float, duration: flo
     return sung[slot]
 
 
+def login_status_text(payload: dict | None) -> str:
+    detail = str((payload or {}).get("error") or "").strip()
+    if detail.startswith("LOGIN_REQUIRED"):
+        extra = detail.split(":", 1)[-1].strip(" .")
+        if extra and extra.lower() not in {"log in to youtube music", "login_required"}:
+            return extra
+        return "Still signed out. Finish Google sign-in in the browser."
+    if detail:
+        return detail
+    return "Still signed out. Finish Google sign-in in the browser."
+
+
 def is_login_error(text: str) -> bool:
     low = (text or "").lower()
     return "login_required" in low or "no youtube cookies" in low or (

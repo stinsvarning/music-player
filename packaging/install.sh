@@ -17,7 +17,7 @@ Install Music ${VERSION} (GTK + Node engine + mpv) for this user.
   --prefix DIR   install root (default: \$HOME/.local)
   --no-extras    skip optional Omarchy bar plugin and Hyprland snippet
 
-Needs: python-gobject, gtk4, mpv, nodejs (>=22), npm
+Needs: python-gobject, gtk4, mpv, nodejs (>=22), npm, sqlite, yt-dlp
 
 Uninstall with: ./packaging/uninstall.sh [--prefix DIR]
 EOF

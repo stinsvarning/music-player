@@ -11,6 +11,7 @@ from music_player.models import (
     default_queue_playlist_name,
     format_time,
     is_login_error,
+    login_status_text,
     page_done,
     parse_playlists,
     parse_status,
@@ -54,6 +55,18 @@ class LoginErrorTests(unittest.TestCase):
         self.assertTrue(is_login_error("no YouTube cookies — open Zen"))
         self.assertFalse(is_login_error("playlist is empty"))
         self.assertFalse(is_login_error(""))
+
+    def test_login_status_shows_engine_hint(self):
+        self.assertIn(
+            "yt-dlp",
+            login_status_text(
+                {"logged_in": False, "error": "LOGIN_REQUIRED: Install yt-dlp to read Chromium cookies."},
+            ),
+        )
+        self.assertEqual(
+            login_status_text({"logged_in": False, "error": "LOGIN_REQUIRED"}),
+            "Still signed out. Finish Google sign-in in the browser.",
+        )
 
 
 class BrowseStateTests(unittest.TestCase):

@@ -65,8 +65,8 @@ async function refreshAuth({ skipSaved = false, force = false } = {}) {
   });
   if (!resolved.header) {
     youtube.disconnect();
-    youtube.authError = LOGIN_REQUIRED;
-    return { ...authSnapshot(), error: LOGIN_REQUIRED };
+    youtube.authError = resolved.error || LOGIN_REQUIRED;
+    return { ...authSnapshot(), error: youtube.authError };
   }
   try {
     await youtube.connect(resolved.header);

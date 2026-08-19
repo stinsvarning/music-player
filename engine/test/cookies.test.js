@@ -136,3 +136,58 @@ test("defaultBrowserCandidates covers zen firefox chrome and brave", () => {
   assert.ok(keys.some((k) => k.includes("google-chrome")));
   assert.ok(keys.some((k) => k.includes("Brave-Browser")));
 });
+
+test("defaultBrowserCandidates names Chromium as chromium not chrome", () => {
+  const list = defaultBrowserCandidates("/home/someone");
+  const chromium = list.find((c) => c.profileDir.endsWith(".config/chromium"));
+  assert.ok(chromium);
+  assert.equal(chromium.browser, "chromium");
+  const chrome = list.find((c) => c.profileDir.endsWith(".config/google-chrome"));
+  assert.equal(chrome.browser, "chrome");
+});
+
+test("resolveCookies uses the Firefox profile marked default in profiles.ini", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "music-ff-ini-"));
+  const root = path.join(home, ".mozilla", "firefox");
+  const stale = path.join(root, "aaaa.default");
+  const live = path.join(root, "bbbb.default-release");
+  fs.mkdirSync(stale, { recursive: true });
+  fs.mkdirSync(live, { recursive: true });
+  fs.writeFileSync(
+    path.join(root, "profiles.ini"),
+    [
+      "[InstallABCDEF]",
+      "Default=bbbb.default-release",
+      "Locked=1",
+      "",
+      "[Profile0]",
+      "Name=default",
+      "IsRelative=1",
+      "Path=aaaa.default",
+      "Default=1",
+      "",
+      "[Profile1]",
+      "Name=default-release",
+      "IsRelative=1",
+      "Path=bbbb.default-release",
+      "",
+    ].join("\n"),
+  );
+  execFileSync("sqlite3", [
+    path.join(stale, "cookies.sqlite"),
+    "CREATE TABLE moz_cookies (host TEXT, name TEXT, value TEXT);",
+    "INSERT INTO moz_cookies VALUES ('.youtube.com','SAPISID','from-stale');",
+  ]);
+  execFileSync("sqlite3", [
+    path.join(live, "cookies.sqlite"),
+    "CREATE TABLE moz_cookies (host TEXT, name TEXT, value TEXT);",
+    "INSERT INTO moz_cookies VALUES ('.youtube.com','SAPISID','from-default');",
+  ]);
+  const resolved = resolveCookies({
+    spec: "auto",
+    home,
+    savedPath: path.join(home, "missing.header"),
+  });
+  assert.match(resolved.header, /SAPISID=from-default/);
+  assert.doesNotMatch(resolved.header, /from-stale/);
+});
