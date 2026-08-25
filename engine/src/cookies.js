@@ -197,11 +197,20 @@ export function cookieScanHint(home) {
   return LOGIN_REQUIRED;
 }
 
-export function resolveCookies({ spec, home, savedPath, readSaved, readBrowser, skipSaved = false } = {}) {
+export function resolveCookies({
+  spec,
+  home,
+  savedPath,
+  readSaved,
+  readBrowser,
+  dumpBrowser,
+  skipSaved = false,
+} = {}) {
   const homeDir = home || os.homedir();
   const saved = savedPath || "";
   const loadSaved = readSaved || readSavedHeader;
-  const loadBrowser = readBrowser || readBrowserSpec;
+  const dump = dumpBrowser || fromYtdlpDump;
+  const loadBrowser = readBrowser || ((raw, dir) => readBrowserSpec(raw, dir, dump));
 
   const fromFile = (file, source) => {
     const header = slimCookieHeader(loadSaved(file));
@@ -253,19 +262,32 @@ export function defaultSavedPath(home = os.homedir()) {
   return path.join(base, "music-player", "cookies.header");
 }
 
-function readBrowserSpec(spec, home = os.homedir()) {
+function readBrowserSpec(spec, home = os.homedir(), dumpBrowser = fromYtdlpDump) {
   const { browser, profileDir } = parseCookiesFrom(spec, home);
   if (browser === "firefox" || browser === "zen" || browser === "librewolf") {
     try {
-      const fromDb = fromSqlite(profileDir);
-      if (hasYoutubeSession(fromDb)) {
-        return fromDb;
-      }
+      return fromSqlite(profileDir);
     } catch {
       /* missing sqlite3 — fall through to yt-dlp */
     }
   }
-  return fromYtdlpDump(spec, home);
+  if (!chromiumCookieDb(profileDir)) {
+    return "";
+  }
+  return dumpBrowser(spec, home);
+}
+
+export function chromiumCookieDb(profileDir) {
+  if (!profileDir) {
+    return "";
+  }
+  for (const rel of ["Default/Cookies", "Cookies"]) {
+    const candidate = path.join(profileDir, rel);
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return "";
 }
 
 export function firefoxDefaultProfile(profileDir) {
@@ -400,7 +422,7 @@ function fromSqlite(profileDir) {
 function fromYtdlpDump(spec, home = os.homedir()) {
   const { browser, profileDir } = parseCookiesFrom(spec, home);
   const browserArg = profileDir ? `${browser}:${profileDir}` : browser;
-  const dest = path.join(os.tmpdir(), `music-player-cookies-${process.pid}.txt`);
+  const dest = path.join(os.tmpdir(), `music-player-cookies-${process.pid}-${Date.now()}.txt`);
   try {
     execFileSync(
       "yt-dlp",
@@ -414,7 +436,12 @@ function fromYtdlpDump(spec, home = os.homedir()) {
         "--ignore-no-formats-error",
         "https://www.youtube.com",
       ],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 30000 },
+      {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: 8000,
+        killSignal: "SIGKILL",
+      },
     );
   } catch {
     /* dump file may still exist */

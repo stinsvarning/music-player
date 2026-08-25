@@ -50,7 +50,19 @@ function authSnapshot() {
   };
 }
 
+let authInFlight = null;
+
 async function refreshAuth({ skipSaved = false, force = false } = {}) {
+  if (authInFlight) {
+    return authInFlight;
+  }
+  authInFlight = refreshAuthOnce({ skipSaved, force }).finally(() => {
+    authInFlight = null;
+  });
+  return authInFlight;
+}
+
+async function refreshAuthOnce({ skipSaved = false, force = false } = {}) {
   if (force) {
     clearSignedOut(signedOutPath());
   } else if (isSignedOut(signedOutPath())) {

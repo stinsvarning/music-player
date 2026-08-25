@@ -63,7 +63,7 @@ class LoginMixin:
     def _start_login_watch(self) -> None:
         if self._login_timer:
             return
-        self._login_timer = GLib.timeout_add(2000, self._on_login_tick)
+        self._login_timer = GLib.timeout_add(5000, self._on_login_tick)
 
     def _stop_login_watch(self) -> None:
         if self._login_timer:

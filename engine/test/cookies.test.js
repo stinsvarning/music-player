@@ -155,6 +155,47 @@ test("defaultBrowserCandidates names Brave Edge and Vivaldi for yt-dlp", () => {
   assert.equal(byDir["/home/someone/.config/google-chrome"], "chrome");
 });
 
+test("firefox sqlite without a YouTube session does not call yt-dlp", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "music-ff-empty-"));
+  const profile = path.join(home, ".mozilla", "firefox", "aaaa.default-release");
+  fs.mkdirSync(profile, { recursive: true });
+  execFileSync("sqlite3", [
+    path.join(profile, "cookies.sqlite"),
+    "CREATE TABLE moz_cookies (host TEXT, name TEXT, value TEXT);",
+    "INSERT INTO moz_cookies VALUES ('.youtube.com','PREF','no-session');",
+  ]);
+  let dumps = 0;
+  const resolved = resolveCookies({
+    spec: "auto",
+    home,
+    savedPath: path.join(home, "missing.header"),
+    dumpBrowser: () => {
+      dumps += 1;
+      return "SAPISID=from-ytdlp";
+    },
+  });
+  assert.equal(dumps, 0);
+  assert.equal(resolved.header, "");
+});
+
+test("chrome-family profiles without a Cookies db do not call yt-dlp", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "music-ch-empty-"));
+  fs.mkdirSync(path.join(home, ".config", "chromium"), { recursive: true });
+  fs.mkdirSync(path.join(home, ".config", "BraveSoftware", "Brave-Browser"), { recursive: true });
+  let dumps = 0;
+  const resolved = resolveCookies({
+    spec: "auto",
+    home,
+    savedPath: path.join(home, "missing.header"),
+    dumpBrowser: () => {
+      dumps += 1;
+      return "SAPISID=from-ytdlp";
+    },
+  });
+  assert.equal(dumps, 0);
+  assert.equal(resolved.header, "");
+});
+
 test("resolveCookies uses the Firefox profile marked default in profiles.ini", () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "music-ff-ini-"));
   const root = path.join(home, ".mozilla", "firefox");

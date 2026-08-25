@@ -486,7 +486,7 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
             self._load_playlists()
             return False
         if err or (payload and payload.get("logged_in") is False):
-            self._show_login((payload or {}).get("error") or err or "")
+            self._show_login((payload or {}).get("error") or err or "", watch=True)
             self._set_account_tip(False, "")
             return False
         self._set_account_tip(True, (payload or {}).get("source") or "")
@@ -619,8 +619,15 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         if not raw or not raw.get("ok"):
             return False
         prev = self.status.track.id if self.status.track else ""
+        was_in = bool(self.status.logged_in)
         self.status = parse_status(raw)
         self._apply_status()
+        if self.status.logged_in and not was_in:
+            if getattr(self, "login_veil", None) is not None and self.login_veil.get_visible():
+                self._hide_login()
+            self._set_account_tip(True, self.status.auth_source)
+            if not self._playlists:
+                self._load_playlists()
         now = self.status.track.id if self.status.track else ""
         if now != prev:
             self._rating_track = now
