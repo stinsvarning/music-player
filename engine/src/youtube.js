@@ -105,7 +105,12 @@ export class Youtube {
     this.loggedIn = true;
     this.authError = "";
     try {
-      await this.#applyPoToken();
+      await Promise.race([
+        this.#applyPoToken(),
+        new Promise((_, reject) => {
+          setTimeout(() => reject(new Error("poToken timeout")), 4000);
+        }),
+      ]);
     } catch (err) {
       console.error("poToken skipped:", err.message || err);
     }

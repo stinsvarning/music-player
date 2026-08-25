@@ -434,12 +434,14 @@ function fromYtdlpDump(spec, home = os.homedir()) {
         "--skip-download",
         "--no-warnings",
         "--ignore-no-formats-error",
-        "https://www.youtube.com",
+        "--socket-timeout",
+        "1",
+        "https://127.0.0.1:1",
       ],
       {
         encoding: "utf8",
         stdio: ["ignore", "pipe", "pipe"],
-        timeout: 8000,
+        timeout: 5000,
         killSignal: "SIGKILL",
       },
     );

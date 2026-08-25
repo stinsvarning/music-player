@@ -121,7 +121,6 @@ async function main() {
   }
   fs.writeFileSync(`${engineSocket()}.pid`, String(process.pid));
   killOrphanMpv(mpvSocket());
-  await refreshAuth();
   await mpv.start();
   await player.applyEq();
   await player.applyVolume();
@@ -182,6 +181,9 @@ async function main() {
     console.error("mpris skipped:", err.message || err);
   }
   console.error(`music-player engine ready (${engineSocket()})`);
+  refreshAuth().catch((err) => {
+    console.error("auth:", err.message || err);
+  });
 }
 
 async function shutdown() {
