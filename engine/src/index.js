@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
+import { AUTH_REFRESH_MS } from "./auth-error.js";
 import { LOGIN_REQUIRED, clearSavedHeader, clearSignedOut, isSignedOut, markSignedOut, resolveCookies, writeSavedHeader } from "./cookies.js";
 import { Mpv } from "./mpv.js";
 import { UrlCache } from "./cache.js";
@@ -41,6 +42,9 @@ player.restoreSession(sessionStore.load());
 
 let server;
 let httpServer;
+let authTimer = null;
+
+youtube.onAuthExpired = () => refreshAuth({ skipSaved: true });
 
 function authSnapshot() {
   return {
@@ -184,9 +188,21 @@ async function main() {
   refreshAuth().catch((err) => {
     console.error("auth:", err.message || err);
   });
+  if (authTimer) {
+    clearInterval(authTimer);
+  }
+  authTimer = setInterval(() => {
+    refreshAuth({ skipSaved: true }).catch((err) => {
+      console.error("auth refresh:", err.message || err);
+    });
+  }, AUTH_REFRESH_MS);
 }
 
 async function shutdown() {
+  if (authTimer) {
+    clearInterval(authTimer);
+    authTimer = null;
+  }
   try {
     await player.flushSession();
   } catch {

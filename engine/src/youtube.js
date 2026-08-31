@@ -13,6 +13,7 @@ Platform.shim.eval = async (data) => {
   const src = typeof data === "string" ? data : data.output;
   return new Function(src)();
 };
+import { looksLikeAuthError } from "./auth-error.js";
 import { LOGIN_REQUIRED } from "./cookies.js";
 import { pickAudioFormat } from "./formats.js";
 import { infoLooksUnplayable, isUnplayableError, unplayableError } from "./playable.js";
@@ -68,6 +69,20 @@ export class Youtube {
     this._likeCache = new Map();
     this._likedIds = null;
     this._likedLoad = null;
+    this.onAuthExpired = null;
+  }
+
+  async #withAuthRetry(fn) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (!looksLikeAuthError(err) || typeof this.onAuthExpired !== "function") {
+        throw err;
+      }
+      await this.onAuthExpired();
+      this.#requireLogin();
+      return await fn();
+    }
   }
 
   disconnect() {
@@ -96,6 +111,11 @@ export class Youtube {
       throw new Error(LOGIN_REQUIRED);
     }
     this._cookie = cookieHeader;
+    this._playlistSession = null;
+    this._trackSession = null;
+    this._searchSession = null;
+    this._likedIds = null;
+    this._likedLoad = null;
     this.yt = await Innertube.create({
       cache: new UniversalCache(false),
       cookie: cookieHeader,
@@ -117,16 +137,18 @@ export class Youtube {
   }
 
   async search(query) {
-    this.#requireLogin();
-    const q = String(query || "").trim();
-    if (!q) {
-      this._searchSession = null;
-      return { tracks: [], done: true, query: "" };
-    }
-    const res = await this.yt.music.search(q, { type: "song" });
-    const session = startSearchCollection(res);
-    this._searchSession = { query: q, pages: 1, ...session };
-    return { tracks: session.tracks, done: session.done, query: q };
+    return this.#withAuthRetry(async () => {
+      this.#requireLogin();
+      const q = String(query || "").trim();
+      if (!q) {
+        this._searchSession = null;
+        return { tracks: [], done: true, query: "" };
+      }
+      const res = await this.yt.music.search(q, { type: "song" });
+      const session = startSearchCollection(res);
+      this._searchSession = { query: q, pages: 1, ...session };
+      return { tracks: session.tracks, done: session.done, query: q };
+    });
   }
 
   async searchMore(query) {
@@ -153,13 +175,15 @@ export class Youtube {
   }
 
   async playlists() {
-    this.#requireLogin();
-    const lib = await this.yt.music.getLibrary();
-    this._playlistSession = await startPlaylistCollection(lib);
-    return {
-      playlists: this._playlistSession.playlists,
-      done: this._playlistSession.done,
-    };
+    return this.#withAuthRetry(async () => {
+      this.#requireLogin();
+      const lib = await this.yt.music.getLibrary();
+      this._playlistSession = await startPlaylistCollection(lib);
+      return {
+        playlists: this._playlistSession.playlists,
+        done: this._playlistSession.done,
+      };
+    });
   }
 
   async playlistsMore() {
@@ -174,17 +198,21 @@ export class Youtube {
   }
 
   async playlistTracks(id) {
-    this.#requireLogin();
-    const pl = await this.yt.music.getPlaylist(id);
-    return collectAllTracks(pl);
+    return this.#withAuthRetry(async () => {
+      this.#requireLogin();
+      const pl = await this.yt.music.getPlaylist(id);
+      return collectAllTracks(pl);
+    });
   }
 
   async playlistTracksPage(id) {
-    this.#requireLogin();
-    const pl = await this.yt.music.getPlaylist(id);
-    const session = startTrackCollection(pl);
-    this._trackSession = { id, ...session };
-    return { tracks: session.tracks, done: session.done };
+    return this.#withAuthRetry(async () => {
+      this.#requireLogin();
+      const pl = await this.yt.music.getPlaylist(id);
+      const session = startTrackCollection(pl);
+      this._trackSession = { id, ...session };
+      return { tracks: session.tracks, done: session.done };
+    });
   }
 
   async playlistTracksMore(id) {
@@ -200,6 +228,7 @@ export class Youtube {
   }
 
   async mix(videoId) {
+    return this.#withAuthRetry(async () => {
     this.#requireLogin();
     const id = textOf(videoId);
     if (!id) {
@@ -241,6 +270,7 @@ export class Youtube {
       throw new Error("could not start a mix for this song");
     }
     return { tracks, title, playlist_id: songRadioId(id) };
+    });
   }
 
   async similar(videoId, { exclude = [] } = {}) {

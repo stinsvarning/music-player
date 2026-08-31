@@ -314,6 +314,14 @@ def login_status_text(payload: dict | None) -> str:
     return "Still signed out. Finish Google sign-in in the browser."
 
 
+LIBRARY_STALE_NOTICE = "session expired — refreshing…"
+
+
+def is_library_stale_error(text: str) -> bool:
+    low = (text or "").lower()
+    return is_login_error(text) or "status code 401" in low or "unauthenticated" in low
+
+
 def is_login_error(text: str) -> bool:
     low = (text or "").lower()
     return "login_required" in low or "no youtube cookies" in low or (

@@ -43,12 +43,13 @@ from .theme import (
 )
 from .widgets.spectrum import SpectrumView
 
-ART_SIZE = 96
+ART_SIZE = 64
 
 EQ_LABELS = ["60", "170", "310", "600", "1k", "3k", "6k", "12k", "14k", "16k"]
 EQ_PRESETS = [("FLAT", "Flat"), ("WARM", "Warm"), ("VOCAL", "Vocal"), ("BASS", "Bass"), ("NIGHT", "Night")]
 WINDOW_W = 920
 WINDOW_H = 720
+SHADE_H = 168
 
 __all__ = ["PlayerWindow", "bind_ellipsize", "constrain_scroll"]
 
@@ -93,6 +94,7 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         self._playlists_token = 0
         self._notice = ""
         self._notice_until = 0.0
+        self._shaded = False
 
         self._install_icons()
         Gtk.StyleContext.add_provider_for_display(
@@ -131,20 +133,25 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         self.set_child(overlay)
         root.append(self._now_playing())
         self.spectrum = SpectrumView()
+        self.spectrum.set_content_height(64)
         wrap = Gtk.Box()
         wrap.add_css_class("chrome")
         wrap.set_margin_top(0)
         wrap.append(self.spectrum)
         root.append(wrap)
-        root.append(self._tabs())
+        self.body_box = self._body()
+        root.append(self.body_box)
 
     def _install_header(self) -> None:
         bar = Gtk.HeaderBar()
         # Suppress the default centered window title — identity lives in now-playing.
         bar.set_title_widget(Gtk.Box())
+        self.btn_shade = self._icon_button("view-restore-symbolic", "Shade", toggle=True)
+        self.btn_shade.connect("toggled", self._on_shade)
         self.btn_account = self._icon_button("system-users-symbolic", "Account")
         self.btn_account.connect("clicked", self._on_account)
         bar.pack_end(self.btn_account)
+        bar.pack_end(self.btn_shade)
         self.set_titlebar(bar)
 
     def _install_icons(self) -> None:
@@ -163,7 +170,7 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         return btn
 
     def _now_playing(self) -> Gtk.Widget:
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         box.add_css_class("chrome")
         box.add_css_class("now-playing")
 
@@ -252,23 +259,85 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         box.append(controls)
         return box
 
-    def _tabs(self) -> Gtk.Widget:
-        self.notebook = Gtk.Notebook()
-        self.notebook.add_css_class("player-tabs")
-        self.notebook.set_vexpand(True)
-        self.notebook.append_page(self._queue_tab(), Gtk.Label(label="Queue"))
-        self.notebook.append_page(self._eq_tab(), Gtk.Label(label="Equalizer"))
-        self.notebook.append_page(self._music_tab(), Gtk.Label(label="Music"))
+    def _body(self) -> Gtk.Widget:
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        box.set_vexpand(True)
+        bar = Gtk.Box(spacing=4)
+        bar.add_css_class("tab-caption")
+        bar.set_margin_start(8)
+        bar.set_margin_end(8)
+        self.btn_mode_queue = Gtk.ToggleButton(label="Queue")
+        self.btn_mode_library = Gtk.ToggleButton(label="Library")
+        self.btn_mode_eq = Gtk.ToggleButton(label="EQ")
+        for btn in (self.btn_mode_queue, self.btn_mode_library, self.btn_mode_eq):
+            btn.add_css_class("eq-preset")
+        self.btn_mode_library.set_group(self.btn_mode_queue)
+        self.btn_mode_queue.connect("toggled", lambda b: b.get_active() and self._show_queue())
+        self.btn_mode_library.connect("toggled", lambda b: b.get_active() and self._show_library())
+        self.btn_mode_eq.connect("toggled", self._on_eq_fold)
+        bar.append(self.btn_mode_queue)
+        bar.append(self.btn_mode_library)
+        bar.append(self.btn_mode_eq)
         self.search_entry = Gtk.Entry()
         self.search_entry.set_placeholder_text("search youtube music")
-        self.search_entry.set_size_request(260, -1)
-        self.search_entry.set_hexpand(False)
+        self.search_entry.set_size_request(220, -1)
         self.search_entry.add_css_class("tab-search")
         self.search_entry.connect("activate", self._on_search)
-        self.notebook.set_action_widget(self.search_entry, Gtk.PackType.END)
-        self.search_entry.set_visible(True)
-        self.notebook.set_current_page(2)
-        return self.notebook
+        spacer = Gtk.Box()
+        spacer.set_hexpand(True)
+        bar.append(spacer)
+        bar.append(self.search_entry)
+        box.append(bar)
+        self.eq_revealer = Gtk.Revealer()
+        self.eq_revealer.set_transition_type(Gtk.RevealerTransitionType.SLIDE_DOWN)
+        self.eq_revealer.set_reveal_child(False)
+        self.eq_revealer.set_child(self._eq_tab())
+        box.append(self.eq_revealer)
+        self.body_stack = Gtk.Stack()
+        self.body_stack.set_vexpand(True)
+        self.body_stack.add_named(self._queue_tab(), "queue")
+        self.body_stack.add_named(self._music_tab(), "library")
+        box.append(self.body_stack)
+        self.notebook = self.body_stack
+        self._show_queue()
+        return box
+
+    def _sync_mode_buttons(self, mode: str) -> None:
+        self._mode_syncing = True
+        try:
+            self.btn_mode_queue.set_active(mode == "queue")
+            self.btn_mode_library.set_active(mode == "library")
+        finally:
+            self._mode_syncing = False
+
+    def _show_queue(self) -> None:
+        if getattr(self, "_mode_syncing", False):
+            self.body_stack.set_visible_child_name("queue")
+            return
+        self.body_stack.set_visible_child_name("queue")
+        self._sync_mode_buttons("queue")
+
+    def _show_library(self) -> None:
+        if getattr(self, "_mode_syncing", False):
+            self.body_stack.set_visible_child_name("library")
+            return
+        self.body_stack.set_visible_child_name("library")
+        self._sync_mode_buttons("library")
+
+    def _on_eq_fold(self, btn: Gtk.ToggleButton) -> None:
+        self.eq_revealer.set_reveal_child(btn.get_active())
+
+    def _on_shade(self, btn: Gtk.ToggleButton) -> None:
+        self._shaded = bool(btn.get_active())
+        if getattr(self, "body_box", None) is not None:
+            self.body_box.set_visible(not self._shaded)
+        if self._shaded:
+            self.set_default_size(WINDOW_W, SHADE_H)
+            self.set_size_request(WINDOW_W, SHADE_H)
+        else:
+            self.set_size_request(WINDOW_W, 200)
+            self.set_default_size(WINDOW_W, WINDOW_H)
+        btn.set_tooltip_text("Restore" if self._shaded else "Shade")
 
     def _list(self) -> Gtk.ListBox:
         widget = Gtk.ListBox()
@@ -292,7 +361,7 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         panes = Gtk.Box(spacing=8, vexpand=True)
         left = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         left.set_hexpand(True)
-        self.queue_empty = Gtk.Label(label="Queue is empty. Open MUSIC and press Enter on a song.")
+        self.queue_empty = Gtk.Label(label="Queue is empty. Open Library and press Enter on a song.")
         self.queue_empty.add_css_class("hint")
         self.queue_empty.set_margin_top(24)
         self.queue_list = self._list()
@@ -325,8 +394,7 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
 
     def _eq_tab(self) -> Gtk.Widget:
         page = self._page()
-        bar, _left, _right = caption_bar()
-        page.append(bar)
+        page.set_vexpand(False)
         presets = Gtk.Box(spacing=6)
         presets.set_margin_top(4)
         presets.set_margin_bottom(16)
@@ -338,10 +406,11 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
             presets.append(btn)
             self._eq_preset_btns[name] = btn
         page.append(presets)
-        sliders = Gtk.Box(spacing=10, homogeneous=True, vexpand=True)
+        sliders = Gtk.Box(spacing=10, homogeneous=True)
         sliders.set_margin_start(8)
         sliders.set_margin_end(8)
-        sliders.set_margin_bottom(20)
+        sliders.set_margin_bottom(8)
+        sliders.set_size_request(-1, 140)
         self._eq_scales: list[Gtk.Scale] = []
         for label in EQ_LABELS:
             col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
@@ -351,6 +420,7 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
             scale.set_inverted(True)
             scale.set_draw_value(False)
             scale.set_vexpand(True)
+            scale.set_size_request(-1, 110)
             scale.connect("value-changed", self._on_eq_band)
             name = Gtk.Label(label=label)
             name.add_css_class("meta")
@@ -411,25 +481,49 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
                 app.quit_engine()
             return True
         if self.search_entry.has_focus():
+            if keyval == Gdk.KEY_Escape:
+                self.set_focus(None)
+                return True
             return False
+        if keyval == Gdk.KEY_Escape:
+            self.set_focus(None)
+            return True
         if keyval == Gdk.KEY_space:
             self._cmd("toggle")
+            return True
+        if keyval in (Gdk.KEY_n, Gdk.KEY_N):
+            self._cmd("next")
+            return True
+        if keyval in (Gdk.KEY_p, Gdk.KEY_P):
+            self._cmd("prev")
+            return True
+        if keyval in (Gdk.KEY_s, Gdk.KEY_S):
+            self._cmd("stop")
+            return True
+        if keyval in (Gdk.KEY_l, Gdk.KEY_L):
+            self.btn_like.set_active(not self.btn_like.get_active())
+            return True
+        if keyval == Gdk.KEY_Up:
+            self.volume.set_value(min(100, self.volume.get_value() + 5))
+            return True
+        if keyval == Gdk.KEY_Down:
+            self.volume.set_value(max(0, self.volume.get_value() - 5))
             return True
         if keyval in (Gdk.KEY_Left, Gdk.KEY_Right):
             delta = -5 if keyval == Gdk.KEY_Left else 5
             self._queue_cmd({"cmd": "seek", "value": max(0, self.status.position + delta)})
             return True
         if keyval in (Gdk.KEY_e, Gdk.KEY_E):
-            self.notebook.set_current_page(1)
+            self.btn_mode_eq.set_active(not self.btn_mode_eq.get_active())
             return True
         if keyval in (Gdk.KEY_m, Gdk.KEY_M):
-            self.notebook.set_current_page(2)
+            self._show_library()
             return True
         if keyval in (Gdk.KEY_q, Gdk.KEY_Q):
-            self.notebook.set_current_page(0)
+            self._show_queue()
             return True
         if mods & Gdk.ModifierType.CONTROL_MASK and keyval in (Gdk.KEY_f, Gdk.KEY_F):
-            self.notebook.set_current_page(2)
+            self._show_library()
             self.search_entry.grab_focus()
             return True
         return False
@@ -1012,7 +1106,7 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         self._fill_song_menu(pop, row, track, source)
 
     def _start_mix(self, track: Track) -> None:
-        self.notebook.set_current_page(0)
+        self._show_queue()
         self._queue_cmd({"cmd": "track.mix", "track": track.to_ipc()}, timeout=40)
 
     def _play_next(self, track: Track) -> None:

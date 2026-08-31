@@ -8,8 +8,10 @@ gi.require_version("Gtk", "4.0")
 from gi.repository import Gdk, Gtk
 
 from .models import (
+    LIBRARY_STALE_NOTICE,
     can_autoselect_playlist,
     format_time,
+    is_library_stale_error,
     page_done,
     parse_playlists,
     parse_tracks,
@@ -37,8 +39,21 @@ class LibraryMixin:
         if token != getattr(self, "_playlists_token", 0):
             return False
         if err:
+            if not getattr(self, "_playlist_auth_retry", False) and is_library_stale_error(err):
+                self._playlist_auth_retry = True
+                self._show_notice(LIBRARY_STALE_NOTICE)
+                self._async(
+                    LIBRARY_STALE_NOTICE,
+                    lambda: self.ipc.request(
+                        {"cmd": "auth.refresh", "skip_saved": True, "force": True},
+                        timeout=25,
+                    ),
+                    lambda _p, _e: self._load_playlists() or False,
+                )
+                return False
             self._set_footer(err)
             return False
+        self._playlist_auth_retry = False
         page = parse_playlists(payload or {})
         first = not self._playlists
         self._playlists.extend(page)
@@ -163,7 +178,7 @@ class LibraryMixin:
         pop.set_child(box)
 
     def _start_playlist_mix(self, plist) -> None:
-        self.notebook.set_current_page(0)
+        self._show_queue()
         self._queue_cmd({"cmd": "playlist.mix", "id": plist.id}, timeout=40)
 
     def _rename_playlist(self, plist, name: str) -> None:
@@ -280,7 +295,7 @@ class LibraryMixin:
         if idx >= len(self._playlists):
             return
         plist = self._playlists[idx]
-        self.notebook.set_current_page(0)
+        self._show_queue()
         self._queue_cmd({"cmd": "playlist.play", "id": plist.id}, timeout=40)
 
     def _on_track_activated(self, _l, row: Gtk.ListBoxRow) -> None:
@@ -292,12 +307,12 @@ class LibraryMixin:
         if not track.playable:
             self._show_notice("Can't play here — YouTube-only")
             return
-        self.notebook.set_current_page(0)
+        self._show_queue()
         self._queue_cmd({"cmd": "track.play", "track": track.to_ipc()}, timeout=40)
 
     def _on_search(self, *_a) -> None:
-        if self.notebook.get_current_page() != 2:
-            self.notebook.set_current_page(2)
+        if self.body_stack.get_visible_child_name() != "library":
+            self._show_library()
         query = self.search_entry.get_text().strip()
         if not query:
             self.browse.search_tracks = None

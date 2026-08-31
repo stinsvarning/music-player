@@ -10,8 +10,10 @@ from music_player.models import (
     current_lyric_index,
     default_queue_playlist_name,
     format_time,
+    is_library_stale_error,
     is_login_error,
     login_status_text,
+    LIBRARY_STALE_NOTICE,
     page_done,
     parse_playlists,
     parse_status,
@@ -55,6 +57,10 @@ class LoginErrorTests(unittest.TestCase):
         self.assertTrue(is_login_error("no YouTube cookies — open Zen"))
         self.assertFalse(is_login_error("playlist is empty"))
         self.assertFalse(is_login_error(""))
+        self.assertTrue(is_library_stale_error("LOGIN_REQUIRED: expired"))
+        self.assertTrue(is_library_stale_error("status code 401"))
+        self.assertFalse(is_library_stale_error("playlist is empty"))
+        self.assertEqual(LIBRARY_STALE_NOTICE, "session expired — refreshing…")
 
     def test_login_status_shows_engine_hint(self):
         self.assertIn(
