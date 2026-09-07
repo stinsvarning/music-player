@@ -2,6 +2,15 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { pickAudioFormat } from "../src/formats.js";
 
+test("prefers AUDIO_QUALITY_HIGH even when a medium stream has higher bitrate", () => {
+  const picked = pickAudioFormat([
+    { itag: 774, has_audio: true, has_video: false, bitrate: 160000, audio_quality: "AUDIO_QUALITY_HIGH" },
+    { itag: 251, has_audio: true, has_video: false, bitrate: 320000, audio_quality: "AUDIO_QUALITY_MEDIUM" },
+    { itag: 140, has_audio: true, has_video: false, bitrate: 128000, audio_quality: "AUDIO_QUALITY_LOW" },
+  ]);
+  assert.equal(picked.itag, 774);
+});
+
 test("prefers high AAC over normal AAC and opus", () => {
   const picked = pickAudioFormat([
     { itag: 141, has_audio: true, has_video: false, bitrate: 256000, audio_quality: "AUDIO_QUALITY_HIGH" },

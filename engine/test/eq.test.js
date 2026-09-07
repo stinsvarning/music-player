@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  BANDS_HZ,
   PRESETS,
   bandsFromMetadata,
   dbToUnit,
@@ -9,6 +10,12 @@ import {
   parseAmetadataLog,
   preampFor,
 } from "../src/eq.js";
+
+test("equalizer graph is ten bands", () => {
+  assert.equal(BANDS_HZ.length, 10);
+  const graph = lavfiEqualizer([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+  assert.equal([...graph.matchAll(/equalizer=/g)].length, 10);
+});
 
 test("YTM presets are modest and named for listening, not genre theater", () => {
   assert.deepEqual(Object.keys(PRESETS), ["Flat", "Warm", "Vocal", "Bass", "Night"]);

@@ -48,7 +48,7 @@ BarWidget {
     root.lastRaiseAt = now
     Quickshell.execDetached([
       "hyprctl", "eval",
-      "local w = hl.get_window(\"class:stream.music.Player\"); if w then hl.dispatch(hl.dsp.window.float({ action = \"set\", window = w })); hl.dispatch(hl.dsp.window.resize({ x = 920, y = 720, window = w })); hl.dispatch(hl.dsp.window.center({ window = w })); hl.dispatch(hl.dsp.window.set_prop({ prop = \"min_size\", value = \"920 720\", window = w })); hl.dispatch(hl.dsp.window.set_prop({ prop = \"max_size\", value = \"920 720\", window = w })) end"
+      "local w = hl.get_window(\"class:stream.music.Player\"); if w then hl.dispatch(hl.dsp.window.float({ action = \"set\", window = w })); hl.dispatch(hl.dsp.window.resize({ x = 920, y = 720, window = w })); hl.dispatch(hl.dsp.window.center({ window = w })); hl.dispatch(hl.dsp.window.set_prop({ prop = \"min_size\", value = \"920 80\", window = w })); hl.dispatch(hl.dsp.window.set_prop({ prop = \"max_size\", value = \"920 720\", window = w })) end"
     ])
     Quickshell.execDetached(["music-player"])
   }
