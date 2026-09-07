@@ -25,11 +25,10 @@ class EngineSupervisor:
             return self._wait_ready(timeout)
         self._clear_stale()
         env = os.environ.copy()
+        env["MUSIC_PLAYER_SOCK"] = str(self.socket_path)
         self.proc = subprocess.Popen(
             ["node", self.binary],
             cwd=str(Path(self.binary).resolve().parent.parent),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
             env=env,
             start_new_session=True,
         )

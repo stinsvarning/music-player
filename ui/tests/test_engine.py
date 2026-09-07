@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from music_player.app import default_socket
 from music_player.engine import EngineSupervisor
 
 
@@ -13,6 +14,30 @@ class FakeIpc:
 
     def alive(self) -> bool:
         return self._alive
+
+
+class DefaultSocketTests(unittest.TestCase):
+    def test_music_player_sock_overrides_xdg_config_home(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sock = str(Path(tmp) / "isolated.sock")
+            xdg = str(Path(tmp) / "xdg")
+            env = {
+                "MUSIC_PLAYER_SOCK": sock,
+                "XDG_CONFIG_HOME": xdg,
+            }
+            with patch.dict(os.environ, env, clear=False):
+                self.assertEqual(default_socket(), Path(sock))
+
+    def test_xdg_config_home_is_used_when_sock_is_unset(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            xdg = str(Path(tmp) / "xdg")
+            env = {"XDG_CONFIG_HOME": xdg}
+            with patch.dict(os.environ, env, clear=False):
+                os.environ.pop("MUSIC_PLAYER_SOCK", None)
+                self.assertEqual(
+                    default_socket(),
+                    Path(xdg) / "music-player" / "engine.sock",
+                )
 
 
 class EngineSupervisorTests(unittest.TestCase):
@@ -40,6 +65,35 @@ class EngineSupervisorTests(unittest.TestCase):
                 with patch.object(sup, "_kill_pidfile"):
                     sup.shutdown()
                     kill_mpv.assert_called_once()
+
+    def test_ensure_points_the_child_at_the_supervisor_socket(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sock = str(Path(tmp) / "engine.sock")
+            ipc = FakeIpc(alive=False)
+            calls = {"n": 0}
+
+            def alive():
+                calls["n"] += 1
+                return calls["n"] > 1
+
+            ipc.alive = alive
+            captured = {}
+
+            def fake_popen(*_a, **kwargs):
+                captured["kwargs"] = kwargs
+
+                class Proc:
+                    def poll(self):
+                        return None
+
+                return Proc()
+
+            with patch("subprocess.Popen", side_effect=fake_popen):
+                with patch.dict(os.environ, {"MUSIC_PLAYER_SOCK": "/not/the/supervisor.sock"}, clear=False):
+                    EngineSupervisor(binary="node", socket_path=sock, ipc=ipc).ensure()
+            env = captured["kwargs"]["env"]
+            self.assertEqual(env["MUSIC_PLAYER_SOCK"], sock)
+            self.assertIsNone(captured["kwargs"].get("stderr"))
 
     def test_ensure_waits_instead_of_spawning_when_peer_exists(self):
         with tempfile.TemporaryDirectory() as tmp:

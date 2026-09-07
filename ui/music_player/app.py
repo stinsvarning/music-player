@@ -16,6 +16,9 @@ from .window import PlayerWindow
 
 
 def default_socket() -> Path:
+    override = os.environ.get("MUSIC_PLAYER_SOCK")
+    if override:
+        return Path(override)
     return Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "music-player" / "engine.sock"
 
 
