@@ -43,13 +43,12 @@ from .theme import (
 )
 from .widgets.spectrum import SpectrumView
 
-ART_SIZE = 64
+ART_SIZE = 96
 
 EQ_LABELS = ["60", "170", "310", "600", "1k", "3k", "6k", "12k", "14k", "16k"]
 EQ_PRESETS = [("FLAT", "Flat"), ("WARM", "Warm"), ("VOCAL", "Vocal"), ("BASS", "Bass"), ("NIGHT", "Night")]
 WINDOW_W = 920
 WINDOW_H = 720
-SHADE_H = 168
 
 __all__ = ["PlayerWindow", "bind_ellipsize", "constrain_scroll"]
 
@@ -94,7 +93,6 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         self._playlists_token = 0
         self._notice = ""
         self._notice_until = 0.0
-        self._shaded = False
 
         self._install_icons()
         Gtk.StyleContext.add_provider_for_display(
@@ -146,12 +144,9 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         bar = Gtk.HeaderBar()
         # Suppress the default centered window title — identity lives in now-playing.
         bar.set_title_widget(Gtk.Box())
-        self.btn_shade = self._icon_button("view-restore-symbolic", "Shade", toggle=True)
-        self.btn_shade.connect("toggled", self._on_shade)
         self.btn_account = self._icon_button("system-users-symbolic", "Account")
         self.btn_account.connect("clicked", self._on_account)
         bar.pack_end(self.btn_account)
-        bar.pack_end(self.btn_shade)
         self.set_titlebar(bar)
 
     def _install_icons(self) -> None:
@@ -170,7 +165,7 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         return btn
 
     def _now_playing(self) -> Gtk.Widget:
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         box.add_css_class("chrome")
         box.add_css_class("now-playing")
 
@@ -326,18 +321,6 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
 
     def _on_eq_fold(self, btn: Gtk.ToggleButton) -> None:
         self.eq_revealer.set_reveal_child(btn.get_active())
-
-    def _on_shade(self, btn: Gtk.ToggleButton) -> None:
-        self._shaded = bool(btn.get_active())
-        if getattr(self, "body_box", None) is not None:
-            self.body_box.set_visible(not self._shaded)
-        if self._shaded:
-            self.set_default_size(WINDOW_W, SHADE_H)
-            self.set_size_request(WINDOW_W, SHADE_H)
-        else:
-            self.set_size_request(WINDOW_W, 200)
-            self.set_default_size(WINDOW_W, WINDOW_H)
-        btn.set_tooltip_text("Restore" if self._shaded else "Shade")
 
     def _list(self) -> Gtk.ListBox:
         widget = Gtk.ListBox()

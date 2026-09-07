@@ -9,7 +9,7 @@ gi.require_version("Gdk", "4.0")
 from gi.repository import Gdk, GLib, Gtk
 
 from music_player.ipc import EngineIPC
-from music_player.window import EQ_LABELS, SHADE_H, PlayerWindow
+from music_player.window import EQ_LABELS, WINDOW_H, PlayerWindow
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -65,16 +65,13 @@ class WindowChromeTests(unittest.TestCase):
         self.win.btn_mode_eq.set_active(False)
         self.assertFalse(self.win.eq_revealer.get_reveal_child())
 
-    def test_shade_hides_body_and_keeps_now_playing(self):
+    def test_header_has_no_shade_control(self):
+        self.assertFalse(hasattr(self.win, "btn_shade"))
         self.assertTrue(self.win.body_box.get_visible())
         self.assertEqual(self.win.track_title.get_text(), "Nothing playing")
-        self.win.btn_shade.set_active(True)
-        self.assertTrue(self.win._shaded)
-        self.assertFalse(self.win.body_box.get_visible())
         self.assertIsNotNone(self.win.spectrum)
-        self.assertLess(SHADE_H, 720)
-        self.win.btn_shade.set_active(False)
-        self.assertTrue(self.win.body_box.get_visible())
+        _w, h = self.win.get_default_size()
+        self.assertEqual(h, WINDOW_H)
 
     def test_window_keys_are_handled(self):
         keys = [
@@ -129,17 +126,17 @@ class WindowChromeTests(unittest.TestCase):
         self.assertEqual(quits, [True])
 
 
-class ShadePackagingTests(unittest.TestCase):
-    def test_hypr_rules_allow_shade_height(self):
+class CompactSizeTests(unittest.TestCase):
+    def test_hypr_rules_use_full_player_size(self):
         text = (ROOT / "packaging" / "hypr-window-rules.conf").read_text()
-        self.assertIn("min_size", text)
-        self.assertRegex(text, r"80")
-        self.assertNotRegex(text, r"min_size\s*=\s*\{\s*920,\s*720\s*\}")
+        self.assertIn("920, 720", text)
+        self.assertNotIn("shade", text.lower())
+        self.assertNotIn("80", text)
 
-    def test_bar_raise_does_not_lock_full_height(self):
+    def test_bar_raise_locks_full_player_size(self):
         text = (ROOT / "packaging" / "llurd.music" / "BarWidget.qml").read_text()
-        self.assertIn('min_size\\", value = \\"920 80\\"', text)
-        self.assertNotIn('min_size\\", value = \\"920 720\\"', text)
+        self.assertIn('min_size\\", value = \\"920 720\\"', text)
+        self.assertNotIn('920 80', text)
 
 
 if __name__ == "__main__":

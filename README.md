@@ -22,7 +22,6 @@ Works on **Omarchy** and other Arch-family systems including **CachyOS**. The ba
 - Right-click a playlist to rename, delete, or start a mix
 - Shuffle, repeat, play similar, sleep timer, and a ten-band EQ
 - Close the window and audio keeps playing; Ctrl+Q quits
-- Compact Winamp-style chrome: vis, playlist first, fold-down EQ, shade mode
 - Follows the current Omarchy theme when those files exist
 - Optional Omarchy bar chip and Hyprland float rules
 
