@@ -73,6 +73,20 @@ class WindowChromeTests(unittest.TestCase):
         _w, h = self.win.get_default_size()
         self.assertEqual(h, WINDOW_H)
 
+    def test_vis_click_cycles_look(self):
+        vis = self.win.spectrum
+        first = vis.look
+        vis.cycle_look()
+        self.assertNotEqual(vis.look, first)
+        found = False
+        model = vis.observe_controllers()
+        for i in range(model.get_n_items()):
+            controller = model.get_item(i)
+            if controller is not None and "GestureClick" in type(controller).__name__:
+                found = True
+                break
+        self.assertTrue(found)
+
     def test_window_keys_are_handled(self):
         keys = [
             (Gdk.KEY_space, False, {"cmd": "toggle"}),

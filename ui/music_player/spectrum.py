@@ -1,5 +1,24 @@
 from __future__ import annotations
 
+LOOKS = ("blocks", "mirror")
+
+
+def cycle_look(current: str) -> str:
+    if current not in LOOKS:
+        return LOOKS[0]
+    return LOOKS[(LOOKS.index(current) + 1) % len(LOOKS)]
+
+
+def bar_index_at(x: float, width: float, count: int) -> int:
+    if count <= 0 or width <= 0:
+        return 0
+    idx = int(float(x) / float(width) * count)
+    if idx < 0:
+        return 0
+    if idx >= count:
+        return count - 1
+    return idx
+
 
 def interpolate_bars(bands: list[float], count: int = 36) -> list[float]:
     if count <= 0:

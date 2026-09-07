@@ -20,7 +20,8 @@ Works on **Omarchy** and other Arch-family systems including **CachyOS**. The ba
 - Queue, lyrics, search, and your playlists
 - Like the current track (syncs with Liked Music)
 - Right-click a playlist to rename, delete, or start a mix
-- Shuffle, repeat, play similar, sleep timer, and a ten-band EQ
+- Shuffle, repeat, play similar, sleep timer, and a fold-down ten-band EQ
+- Spectrum vis in the chrome; click it to switch looks
 - Close the window and audio keeps playing; Ctrl+Q quits
 - Follows the current Omarchy theme when those files exist
 - Optional Omarchy bar chip and Hyprland float rules
