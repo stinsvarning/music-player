@@ -116,6 +116,11 @@ class OmarchyPaletteTests(unittest.TestCase):
         self.assertIn("border-radius: 0", css)
         self.assertNotIn("ghost-head", css)
 
+    def test_css_top_and_bottom_rails_share_size(self):
+        css = css_for(FALLBACK)
+        self.assertIn(".deck-bar, .foot", css)
+        self.assertIn("min-height: 40px", css)
+
 
 if __name__ == "__main__":
     unittest.main()

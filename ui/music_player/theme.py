@@ -290,9 +290,17 @@ def css_for(palette: Palette) -> str:
             font-size: 18px;
             min-width: 2em;
         }}
+        .deck-bar, .foot {{
+            padding: 10px 18px;
+            min-height: 40px;
+        }}
         .deck-bar {{
-            padding: 12px 18px;
             border-bottom: 1px solid {mix_hex(palette.bg, palette.muted, 0.4)};
+        }}
+        .deck-bar button.home-link {{
+            min-height: 0;
+            min-width: 0;
+            padding: 0;
         }}
         .wordmark {{
             letter-spacing: 0.22em;
@@ -380,7 +388,6 @@ def css_for(palette: Palette) -> str:
             border-color: {palette.accent};
         }}
         .foot {{
-            padding: 12px 20px;
             border-top: 1px solid {mix_hex(palette.bg, palette.muted, 0.4)};
         }}
         .pulse {{

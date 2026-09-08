@@ -125,6 +125,15 @@ class WindowChromeTests(unittest.TestCase):
         self.assertIsNone(self.win.get_titlebar())
         self.assertFalse(self.win.get_decorated())
 
+    def test_top_and_bottom_rails_are_the_same_height(self):
+        top = self.win.deck.get_first_child()
+        foot = self.win.deck.get_last_child()
+        self.assertTrue(top.has_css_class("deck-bar"))
+        self.assertTrue(foot.has_css_class("foot"))
+        top_h = top.measure(Gtk.Orientation.VERTICAL, -1).natural
+        foot_h = foot.measure(Gtk.Orientation.VERTICAL, -1).natural
+        self.assertEqual(top_h, foot_h)
+
     def test_window_keys_are_handled(self):
         keys = [
             (Gdk.KEY_space, False, {"cmd": "toggle"}),

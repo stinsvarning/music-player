@@ -162,8 +162,10 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
     def _deck_bar(self) -> Gtk.Widget:
         bar = Gtk.Box(spacing=12)
         bar.add_css_class("deck-bar")
+        bar.set_valign(Gtk.Align.FILL)
         mark = Gtk.Label(label="Music Player")
         mark.add_css_class("wordmark")
+        mark.set_valign(Gtk.Align.CENTER)
         bar.append(mark)
         spacer = Gtk.Box()
         spacer.set_hexpand(True)
@@ -171,6 +173,7 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         self.btn_account = Gtk.Button(label="Account")
         self.btn_account.add_css_class("flat")
         self.btn_account.add_css_class("home-link")
+        self.btn_account.set_valign(Gtk.Align.CENTER)
         self.btn_account.connect("clicked", self._on_account)
         bar.append(self.btn_account)
         return bar
@@ -306,10 +309,12 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         foot.add_css_class("foot")
         self.status_dot = Gtk.Label(label="●")
         self.status_dot.add_css_class("pulse-off")
+        self.status_dot.set_valign(Gtk.Align.CENTER)
         self.status_label = Gtk.Label(label="stopped")
         self.status_label.add_css_class("meta")
         self.status_label.set_xalign(0)
         self.status_label.set_hexpand(True)
+        self.status_label.set_valign(Gtk.Align.CENTER)
         foot.append(self.status_dot)
         foot.append(self.status_label)
         return foot
