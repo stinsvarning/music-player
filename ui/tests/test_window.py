@@ -9,7 +9,7 @@ gi.require_version("Gdk", "4.0")
 from gi.repository import Gdk, GLib, Gtk
 
 from music_player.ipc import EngineIPC
-from music_player.window import EQ_LABELS, WINDOW_H, PlayerWindow
+from music_player.window import WINDOW_H, PlayerWindow
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -55,37 +55,15 @@ class WindowChromeTests(unittest.TestCase):
         self.win._show_queue()
         self.assertEqual(self.win.body_stack.get_visible_child_name(), "queue")
 
-    def test_eq_fold_is_hidden_and_independent_of_body_mode(self):
-        self.assertEqual(len(EQ_LABELS), 10)
-        self.assertFalse(self.win.eq_revealer.get_reveal_child())
-        self.assertFalse(self.win.btn_mode_eq.get_active())
-        self.win.btn_mode_eq.set_active(True)
-        self.assertTrue(self.win.eq_revealer.get_reveal_child())
-        self.assertEqual(self.win.body_stack.get_visible_child_name(), "queue")
-        self.win.btn_mode_eq.set_active(False)
-        self.assertFalse(self.win.eq_revealer.get_reveal_child())
-
-    def test_header_has_no_shade_control(self):
+    def test_no_eq_fold_or_shade(self):
+        self.assertFalse(hasattr(self.win, "eq_revealer"))
+        self.assertFalse(hasattr(self.win, "btn_mode_eq"))
         self.assertFalse(hasattr(self.win, "btn_shade"))
         self.assertTrue(self.win.body_box.get_visible())
         self.assertEqual(self.win.track_title.get_text(), "Nothing playing")
         self.assertIsNotNone(self.win.spectrum)
         _w, h = self.win.get_default_size()
         self.assertEqual(h, WINDOW_H)
-
-    def test_vis_click_cycles_look(self):
-        vis = self.win.spectrum
-        first = vis.look
-        vis.cycle_look()
-        self.assertNotEqual(vis.look, first)
-        found = False
-        model = vis.observe_controllers()
-        for i in range(model.get_n_items()):
-            controller = model.get_item(i)
-            if controller is not None and "GestureClick" in type(controller).__name__:
-                found = True
-                break
-        self.assertTrue(found)
 
     def test_window_keys_are_handled(self):
         keys = [
@@ -114,8 +92,7 @@ class WindowChromeTests(unittest.TestCase):
         self.assertEqual(self.win.body_stack.get_visible_child_name(), "queue")
         self.assertTrue(self._key(Gdk.KEY_m))
         self.assertEqual(self.win.body_stack.get_visible_child_name(), "library")
-        self.assertTrue(self._key(Gdk.KEY_e))
-        self.assertTrue(self.win.eq_revealer.get_reveal_child())
+        self.assertTrue(self._key(Gdk.KEY_F11))
 
         self.win.present()
         ctx = GLib.MainContext.default()
@@ -141,16 +118,16 @@ class WindowChromeTests(unittest.TestCase):
 
 
 class CompactSizeTests(unittest.TestCase):
-    def test_hypr_rules_use_full_player_size(self):
+    def test_hypr_rules_fill_the_monitor(self):
         text = (ROOT / "packaging" / "hypr-window-rules.conf").read_text()
-        self.assertIn("920, 720", text)
+        self.assertIn("music", text)
+        self.assertNotIn("920, 720", text)
         self.assertNotIn("shade", text.lower())
-        self.assertNotIn("80", text)
 
-    def test_bar_raise_locks_full_player_size(self):
+    def test_bar_raise_maximizes(self):
         text = (ROOT / "packaging" / "llurd.music" / "BarWidget.qml").read_text()
-        self.assertIn('min_size\\", value = \\"920 720\\"', text)
-        self.assertNotIn('920 80', text)
+        self.assertIn("maximized", text)
+        self.assertNotIn("920 720", text)
 
 
 if __name__ == "__main__":

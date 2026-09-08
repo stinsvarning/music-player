@@ -1,26 +1,10 @@
 from __future__ import annotations
 
-LOOKS = ("blocks", "mirror")
+BRICK_COLS = 24
+BRICK_SEGS = 12
 
 
-def cycle_look(current: str) -> str:
-    if current not in LOOKS:
-        return LOOKS[0]
-    return LOOKS[(LOOKS.index(current) + 1) % len(LOOKS)]
-
-
-def bar_index_at(x: float, width: float, count: int) -> int:
-    if count <= 0 or width <= 0:
-        return 0
-    idx = int(float(x) / float(width) * count)
-    if idx < 0:
-        return 0
-    if idx >= count:
-        return count - 1
-    return idx
-
-
-def interpolate_bars(bands: list[float], count: int = 36) -> list[float]:
+def interpolate_bars(bands: list[float], count: int = BRICK_COLS) -> list[float]:
     if count <= 0:
         return []
     if not bands:
@@ -40,6 +24,24 @@ def interpolate_bars(bands: list[float], count: int = 36) -> list[float]:
     return out
 
 
+def brick_columns(bands: list[float], cols: int = BRICK_COLS, segs: int = BRICK_SEGS) -> list[int]:
+    bars = interpolate_bars(bands, cols)
+    return [max(0, min(segs, int(round(v * segs)))) for v in bars]
+
+
+def tick_brick_peaks(peaks: list[int], cols: list[int]) -> list[int]:
+    n = len(cols)
+    if len(peaks) != n:
+        peaks = list(peaks[:n]) + [0] * max(0, n - len(peaks))
+    next_peaks: list[int] = []
+    for peak, height in zip(peaks, cols):
+        if height >= peak:
+            next_peaks.append(int(height))
+        else:
+            next_peaks.append(max(0, int(peak) - 1))
+    return next_peaks
+
+
 def tick_peaks(peaks: list[float], bars: list[float], decay: float = 0.045) -> list[float]:
     n = len(bars)
     if len(peaks) != n:
@@ -51,3 +53,14 @@ def tick_peaks(peaks: list[float], bars: list[float], decay: float = 0.045) -> l
         else:
             next_peaks.append(max(0.0, float(peak) - decay))
     return next_peaks
+
+
+def bar_index_at(x: float, width: float, count: int) -> int:
+    if count <= 0 or width <= 0:
+        return 0
+    idx = int(float(x) / float(width) * count)
+    if idx < 0:
+        return 0
+    if idx >= count:
+        return count - 1
+    return idx

@@ -43,12 +43,9 @@ from .theme import (
 )
 from .widgets.spectrum import SpectrumView
 
-ART_SIZE = 96
-
-EQ_LABELS = ["60", "170", "310", "600", "1k", "3k", "6k", "12k", "14k", "16k"]
-EQ_PRESETS = [("FLAT", "Flat"), ("WARM", "Warm"), ("VOCAL", "Vocal"), ("BASS", "Bass"), ("NIGHT", "Night")]
-WINDOW_W = 920
-WINDOW_H = 720
+ART_SIZE = 72
+WINDOW_W = 1180
+WINDOW_H = 880
 
 __all__ = ["PlayerWindow", "bind_ellipsize", "constrain_scroll"]
 
@@ -57,12 +54,12 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
     def __init__(self, app: Gtk.Application, ipc: EngineIPC):
         super().__init__(application=app, title="Music")
         self.set_default_size(WINDOW_W, WINDOW_H)
-        self.set_size_request(640, 480)
+        self.set_size_request(720, 540)
+        self.maximize()
         self.add_css_class("app-window")
         self.ipc = ipc
         self.status = PlayerStatus()
         self._syncing = False
-        self._eq_sending = False
         self._seek = SeekGate()
         self._seek_timer = 0
         self._base_palette = load_active_palette()
@@ -129,21 +126,23 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         overlay.set_child(root)
         overlay.add_overlay(self._login_overlay())
         self.set_child(overlay)
-        root.append(self._now_playing())
-        self.spectrum = SpectrumView()
-        self.spectrum.set_content_height(64)
-        wrap = Gtk.Box()
-        wrap.add_css_class("chrome")
-        wrap.set_margin_top(0)
-        wrap.append(self.spectrum)
-        root.append(wrap)
+        root.append(self._lcd())
+        root.append(self._transport())
         self.body_box = self._body()
         root.append(self.body_box)
+        root.append(self._footer())
 
     def _install_header(self) -> None:
         bar = Gtk.HeaderBar()
         # Suppress the default centered window title — identity lives in now-playing.
-        bar.set_title_widget(Gtk.Box())
+        word = Gtk.Box(spacing=10)
+        mark = Gtk.Label(label="MUSIC")
+        mark.add_css_class("wordmark")
+        tag = Gtk.Label(label="youtube music")
+        tag.add_css_class("home-link")
+        word.append(mark)
+        word.append(tag)
+        bar.set_title_widget(word)
         self.btn_account = self._icon_button("system-users-symbolic", "Account")
         self.btn_account.connect("clicked", self._on_account)
         bar.pack_end(self.btn_account)
@@ -164,30 +163,56 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         btn.add_css_class("flat")
         return btn
 
-    def _now_playing(self) -> Gtk.Widget:
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        box.add_css_class("chrome")
-        box.add_css_class("now-playing")
-
-        top = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+    def _lcd(self) -> Gtk.Widget:
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        box.add_css_class("lcd")
+        top = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
         self.art = Gtk.Picture()
         self.art.set_size_request(ART_SIZE, ART_SIZE)
         self.art.set_content_fit(Gtk.ContentFit.COVER)
-        text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, valign=Gtk.Align.CENTER, hexpand=True)
+        text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, hexpand=True, valign=Gtk.Align.CENTER)
         self.track_title = Gtk.Label(label="Nothing playing", xalign=0)
-        self.track_title.add_css_class("title")
-        bind_ellipsize(self.track_title, 48)
+        self.track_title.add_css_class("marquee")
+        bind_ellipsize(self.track_title, 56)
         self.track_meta = Gtk.Label(label="YouTube Music", xalign=0)
-        self.track_meta.add_css_class("meta")
-        bind_ellipsize(self.track_meta, 48)
+        self.track_meta.add_css_class("artist")
+        bind_ellipsize(self.track_meta, 56)
         text.append(self.track_title)
         text.append(self.track_meta)
+        clock = Gtk.Box(spacing=8, valign=Gtk.Align.END)
+        self.pos_label = Gtk.Label(label="0:00")
+        self.pos_label.add_css_class("clock")
+        slash = Gtk.Label(label="/")
+        slash.add_css_class("dur")
+        self.dur_label = Gtk.Label(label="0:00")
+        self.dur_label.add_css_class("dur")
+        clock.append(self.pos_label)
+        clock.append(slash)
+        clock.append(self.dur_label)
         top.append(self.art)
         top.append(text)
+        top.append(clock)
+        box.append(top)
+        self.spectrum = SpectrumView()
+        self.spectrum.set_content_height(84)
+        box.append(self.spectrum)
+        return box
 
-        seek_row = Gtk.Box(spacing=8)
-        self.pos_label = Gtk.Label(label="0:00")
-        self.pos_label.add_css_class("meta")
+    def _transport(self) -> Gtk.Widget:
+        box = Gtk.Box(spacing=10)
+        box.add_css_class("transport")
+        self.btn_prev = self._icon_button("media-skip-backward-symbolic", "Previous")
+        self.btn_play = self._icon_button("media-playback-start-symbolic", "Play")
+        self.btn_play.add_css_class("play")
+        self.btn_stop = self._icon_button("media-playback-stop-symbolic", "Stop")
+        self.btn_next = self._icon_button("media-skip-forward-symbolic", "Next")
+        for btn in (self.btn_prev, self.btn_play, self.btn_stop, self.btn_next):
+            btn.add_css_class("tb")
+            box.append(btn)
+        self.btn_prev.connect("clicked", lambda *_: self._cmd("prev"))
+        self.btn_play.connect("clicked", lambda *_: self._cmd("toggle"))
+        self.btn_stop.connect("clicked", lambda *_: self._cmd("stop"))
+        self.btn_next.connect("clicked", lambda *_: self._cmd("next"))
         self.seek = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 1, 1)
         self.seek.set_draw_value(False)
         self.seek.set_hexpand(True)
@@ -200,17 +225,7 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         click.connect("released", self._on_seek_release)
         click.connect("cancel", self._on_seek_release)
         self.seek.add_controller(click)
-        self.dur_label = Gtk.Label(label="0:00")
-        self.dur_label.add_css_class("meta")
-        seek_row.append(self.pos_label)
-        seek_row.append(self.seek)
-        seek_row.append(self.dur_label)
-
-        controls = Gtk.Box(spacing=2)
-        self.btn_prev = self._icon_button("media-skip-backward-symbolic", "Previous")
-        self.btn_play = self._icon_button("media-playback-start-symbolic", "Play")
-        self.btn_stop = self._icon_button("media-playback-stop-symbolic", "Stop")
-        self.btn_next = self._icon_button("media-skip-forward-symbolic", "Next")
+        box.append(self.seek)
         self.btn_shuf = self._icon_button("media-playlist-shuffle-symbolic", "Shuffle", toggle=True)
         self.btn_rep = self._icon_button("media-playlist-repeat-symbolic", "Repeat off", toggle=True)
         self.btn_auto = self._icon_button("media-playlist-consecutive-symbolic", "Play similar after queue (off)", toggle=True)
@@ -219,40 +234,39 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         self.btn_like.add_css_class("rate")
         self.btn_sleep.connect("toggled", self._on_sleep_toggle)
         self.btn_like.connect("toggled", self._on_like)
-        self.btn_prev.connect("clicked", lambda *_: self._cmd("prev"))
-        self.btn_play.connect("clicked", lambda *_: self._cmd("toggle"))
-        self.btn_stop.connect("clicked", lambda *_: self._cmd("stop"))
-        self.btn_next.connect("clicked", lambda *_: self._cmd("next"))
         self.btn_shuf.connect("toggled", self._on_shuffle)
         self.btn_rep.connect("toggled", self._on_repeat)
         self.btn_auto.connect("toggled", self._on_automix)
-        for btn in (
-            self.btn_prev,
-            self.btn_play,
-            self.btn_stop,
-            self.btn_next,
-            self.btn_shuf,
-            self.btn_rep,
-            self.btn_auto,
-            self.btn_sleep,
-            self.btn_like,
-        ):
-            controls.append(btn)
-        vol_box = Gtk.Box(spacing=8, hexpand=True, halign=Gtk.Align.END)
+        for btn in (self.btn_shuf, self.btn_rep, self.btn_auto, self.btn_sleep, self.btn_like):
+            box.append(btn)
+        vol = Gtk.Box(spacing=8)
+        vol_lab = Gtk.Label(label="VOL")
+        vol_lab.add_css_class("knob-lbl")
         self.volume = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 1)
         self.volume.set_draw_value(False)
-        self.volume.set_size_request(120, -1)
+        self.volume.set_size_request(110, -1)
         self.volume.set_tooltip_text("Volume")
         self.volume.connect("value-changed", self._on_volume)
         self.vol_num = Gtk.Label(label="70")
-        self.vol_num.add_css_class("meta")
-        vol_box.append(self.volume)
-        vol_box.append(self.vol_num)
-        controls.append(vol_box)
-        box.append(top)
-        box.append(seek_row)
-        box.append(controls)
+        self.vol_num.add_css_class("clock")
+        vol.append(vol_lab)
+        vol.append(self.volume)
+        vol.append(self.vol_num)
+        box.append(vol)
         return box
+
+    def _footer(self) -> Gtk.Widget:
+        foot = Gtk.Box(spacing=10)
+        foot.add_css_class("foot")
+        pulse = Gtk.Label(label="●")
+        pulse.add_css_class("pulse")
+        hint = Gtk.Label(label="playing  ·  Super+W hides, audio stays  ·  F11 fullscreen  ·  Ctrl+Q quits")
+        hint.add_css_class("meta")
+        hint.set_xalign(0)
+        hint.set_hexpand(True)
+        foot.append(pulse)
+        foot.append(hint)
+        return foot
 
     def _body(self) -> Gtk.Widget:
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
@@ -263,31 +277,28 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         bar.set_margin_end(8)
         self.btn_mode_queue = Gtk.ToggleButton(label="Queue")
         self.btn_mode_library = Gtk.ToggleButton(label="Library")
-        self.btn_mode_eq = Gtk.ToggleButton(label="EQ")
-        for btn in (self.btn_mode_queue, self.btn_mode_library, self.btn_mode_eq):
-            btn.add_css_class("eq-preset")
+        for btn in (self.btn_mode_queue, self.btn_mode_library):
+            btn.add_css_class("seg")
         self.btn_mode_library.set_group(self.btn_mode_queue)
         self.btn_mode_queue.connect("toggled", lambda b: b.get_active() and self._show_queue())
         self.btn_mode_library.connect("toggled", lambda b: b.get_active() and self._show_library())
-        self.btn_mode_eq.connect("toggled", self._on_eq_fold)
         bar.append(self.btn_mode_queue)
         bar.append(self.btn_mode_library)
-        bar.append(self.btn_mode_eq)
+        find_l = Gtk.Label(label="FIND")
+        find_l.add_css_class("find-l")
         self.search_entry = Gtk.Entry()
-        self.search_entry.set_placeholder_text("search youtube music")
-        self.search_entry.set_size_request(220, -1)
-        self.search_entry.add_css_class("tab-search")
+        self.search_entry.set_placeholder_text("title or artist  ·  Enter searches YouTube")
+        self.search_entry.set_hexpand(True)
+        self.search_entry.add_css_class("find-i")
         self.search_entry.connect("activate", self._on_search)
+        slash = Gtk.Label(label="/")
+        slash.add_css_class("find-k")
         spacer = Gtk.Box()
-        spacer.set_hexpand(True)
-        bar.append(spacer)
+        spacer.set_hexpand(False)
+        bar.append(find_l)
         bar.append(self.search_entry)
+        bar.append(slash)
         box.append(bar)
-        self.eq_revealer = Gtk.Revealer()
-        self.eq_revealer.set_transition_type(Gtk.RevealerTransitionType.SLIDE_DOWN)
-        self.eq_revealer.set_reveal_child(False)
-        self.eq_revealer.set_child(self._eq_tab())
-        box.append(self.eq_revealer)
         self.body_stack = Gtk.Stack()
         self.body_stack.set_vexpand(True)
         self.body_stack.add_named(self._queue_tab(), "queue")
@@ -318,9 +329,6 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
             return
         self.body_stack.set_visible_child_name("library")
         self._sync_mode_buttons("library")
-
-    def _on_eq_fold(self, btn: Gtk.ToggleButton) -> None:
-        self.eq_revealer.set_reveal_child(btn.get_active())
 
     def _list(self) -> Gtk.ListBox:
         widget = Gtk.ListBox()
@@ -373,47 +381,6 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         panes.append(left)
         panes.append(right)
         page.append(panes)
-        return page
-
-    def _eq_tab(self) -> Gtk.Widget:
-        page = self._page()
-        page.set_vexpand(False)
-        presets = Gtk.Box(spacing=6)
-        presets.set_margin_top(4)
-        presets.set_margin_bottom(16)
-        self._eq_preset_btns: dict[str, Gtk.ToggleButton] = {}
-        for label, name in EQ_PRESETS:
-            btn = Gtk.ToggleButton(label=label)
-            btn.add_css_class("eq-preset")
-            btn.connect("toggled", self._on_eq_preset, name)
-            presets.append(btn)
-            self._eq_preset_btns[name] = btn
-        page.append(presets)
-        sliders = Gtk.Box(spacing=10, homogeneous=True)
-        sliders.set_margin_start(8)
-        sliders.set_margin_end(8)
-        sliders.set_margin_bottom(8)
-        sliders.set_size_request(-1, 140)
-        self._eq_scales: list[Gtk.Scale] = []
-        for label in EQ_LABELS:
-            col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-            val = Gtk.Label(label="0")
-            val.add_css_class("meta")
-            scale = Gtk.Scale.new_with_range(Gtk.Orientation.VERTICAL, -12, 12, 0.5)
-            scale.set_inverted(True)
-            scale.set_draw_value(False)
-            scale.set_vexpand(True)
-            scale.set_size_request(-1, 110)
-            scale.connect("value-changed", self._on_eq_band)
-            name = Gtk.Label(label=label)
-            name.add_css_class("meta")
-            col.append(val)
-            col.append(scale)
-            col.append(name)
-            sliders.append(col)
-            self._eq_scales.append(scale)
-            scale._value_label = val  # type: ignore[attr-defined]
-        page.append(sliders)
         return page
 
     def _music_tab(self) -> Gtk.Widget:
@@ -496,8 +463,11 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
             delta = -5 if keyval == Gdk.KEY_Left else 5
             self._queue_cmd({"cmd": "seek", "value": max(0, self.status.position + delta)})
             return True
-        if keyval in (Gdk.KEY_e, Gdk.KEY_E):
-            self.btn_mode_eq.set_active(not self.btn_mode_eq.get_active())
+        if keyval == Gdk.KEY_F11:
+            if self.is_fullscreen():
+                self.unfullscreen()
+            else:
+                self.fullscreen()
             return True
         if keyval in (Gdk.KEY_m, Gdk.KEY_M):
             self._show_library()
@@ -505,8 +475,9 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         if keyval in (Gdk.KEY_q, Gdk.KEY_Q):
             self._show_queue()
             return True
-        if mods & Gdk.ModifierType.CONTROL_MASK and keyval in (Gdk.KEY_f, Gdk.KEY_F):
-            self._show_library()
+        if keyval == Gdk.KEY_slash or (
+            mods & Gdk.ModifierType.CONTROL_MASK and keyval in (Gdk.KEY_f, Gdk.KEY_F)
+        ):
             self.search_entry.grab_focus()
             return True
         return False
@@ -765,21 +736,8 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
                 self.set_title(st.track.title or "Music")
             else:
                 self.set_title("Music")
-            self._sync_eq(st)
         finally:
             self._syncing = False
-
-    def _sync_eq(self, st: PlayerStatus) -> None:
-        self._eq_sending = True
-        try:
-            for i, scale in enumerate(self._eq_scales):
-                if i < len(st.eq_bands):
-                    scale.set_value(st.eq_bands[i])
-                    scale._value_label.set_text(f"{st.eq_bands[i]:+.0f}")  # type: ignore[attr-defined]
-            for name, btn in self._eq_preset_btns.items():
-                btn.set_active(st.eq_preset.lower() == name.lower())
-        finally:
-            self._eq_sending = False
 
     def _refresh_queue(self) -> None:
         try:
@@ -925,18 +883,6 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
             self._syncing = True
             self.btn_sleep.set_active(False)
             self._syncing = False
-
-    def _on_eq_preset(self, btn: Gtk.ToggleButton, name: str) -> None:
-        if self._eq_sending or not btn.get_active():
-            return
-        self._queue_cmd({"cmd": "eq", "name": name})
-
-    def _on_eq_band(self, scale: Gtk.Scale) -> None:
-        if self._eq_sending:
-            return
-        idx = self._eq_scales.index(scale)
-        scale._value_label.set_text(f"{scale.get_value():+.0f}")  # type: ignore[attr-defined]
-        self._queue_cmd({"cmd": "eq", "band": idx, "value": scale.get_value()})
 
     def _on_queue_activate(self, _l, row: Gtk.ListBoxRow) -> None:
         idx = row.get_index()

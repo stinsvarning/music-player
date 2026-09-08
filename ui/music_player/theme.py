@@ -266,15 +266,106 @@ def css_for(palette: Palette) -> str:
             background: {palette.bg};
             color: {palette.fg};
             font-size: 12px;
+            font-family: "JetBrains Mono", "Space Grotesk", monospace;
         }}
         headerbar {{
-            background: {palette.panel};
-            padding: 2px 8px;
-            min-height: 28px;
+            background: {palette.bg};
+            padding: 8px 16px;
+            min-height: 36px;
+            border-bottom: 1px solid {mix_hex(palette.bg, palette.muted, 0.4)};
+        }}
+        .wordmark {{
+            letter-spacing: 0.34em;
+            font-size: 11px;
+            color: {palette.fg};
+        }}
+        .home-link {{
+            letter-spacing: 0.24em;
+            font-size: 10px;
+            color: {palette.muted};
         }}
         .chrome {{
             background: {palette.panel};
             padding: 8px 12px;
+        }}
+        .lcd {{
+            background: {mix_hex(palette.bg, "#000000", 0.45)};
+            padding: 18px 22px 10px;
+            border-bottom: 1px solid {mix_hex(palette.bg, palette.muted, 0.4)};
+        }}
+        .marquee {{
+            color: {palette.accent};
+            font-size: 36px;
+            font-weight: 400;
+            letter-spacing: 0.04em;
+        }}
+        .artist {{
+            letter-spacing: 0.18em;
+            font-size: 11px;
+            color: {mix_hex(palette.muted, palette.accent, 0.35)};
+            text-transform: uppercase;
+        }}
+        .clock {{
+            color: {palette.accent};
+            font-size: 28px;
+        }}
+        .dur {{
+            color: {palette.muted};
+            font-size: 16px;
+        }}
+        .transport {{
+            padding: 12px 20px;
+            border-bottom: 1px solid {mix_hex(palette.bg, palette.muted, 0.4)};
+        }}
+        button.tb {{
+            min-width: 44px;
+            min-height: 36px;
+            border-radius: 0;
+        }}
+        button.play {{
+            min-width: 74px;
+            background: {palette.accent};
+            color: {palette.bg};
+            border-color: {palette.accent};
+        }}
+        button.play:hover {{
+            background: {palette.peak};
+            border-color: {palette.peak};
+            color: {palette.bg};
+        }}
+        .knob-lbl, .find-l, .find-k {{
+            letter-spacing: 0.18em;
+            font-size: 9px;
+            color: {palette.muted};
+        }}
+        .find-k {{
+            border: 1px solid {mix_hex(palette.bg, palette.muted, 0.4)};
+            padding: 2px 6px;
+        }}
+        entry.find-i {{
+            background: transparent;
+            border: none;
+            min-height: 28px;
+        }}
+        button.seg {{
+            letter-spacing: 0.22em;
+            font-size: 10px;
+            min-height: 28px;
+            border-radius: 0;
+            background: transparent;
+            color: {palette.muted};
+        }}
+        button.seg:checked {{
+            background: {palette.accent};
+            color: {palette.bg};
+            border-color: {palette.accent};
+        }}
+        .foot {{
+            padding: 12px 20px;
+            border-top: 1px solid {mix_hex(palette.bg, palette.muted, 0.4)};
+        }}
+        .pulse {{
+            color: {palette.accent};
         }}
         .login-veil {{
             background: {mix_hex(palette.bg, "#000000", 0.35)};

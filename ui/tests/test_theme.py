@@ -79,8 +79,9 @@ class OmarchyPaletteTests(unittest.TestCase):
     def test_css_has_tab_caption_and_search(self):
         css = css_for(FALLBACK)
         self.assertIn(".tab-caption", css)
-        self.assertIn("entry.tab-search", css)
-        self.assertIn("button.eq-preset", css)
+        self.assertIn(".lcd", css)
+        self.assertIn(".marquee", css)
+        self.assertIn("button.seg", css)
         self.assertIn(".tab-page", css)
         self.assertNotIn("lyric-now", css)
         self.assertIn("row.unplayable", css)
