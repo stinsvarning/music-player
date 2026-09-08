@@ -64,10 +64,10 @@ class SpectrumView(Gtk.DrawingArea):
         n = len(self._cols)
         if n == 0 or width <= 0 or height <= 0:
             return
-        gap = 3.0
-        col_w = max(4.0, (width - gap * (n + 1)) / n)
-        seg = max(4.0, (height - 4) / BRICK_SEGS)
-        brick = max(2.0, seg - 2.0)
+        gap = 1.5
+        col_w = max(2.0, (width - gap * (n + 1)) / n)
+        seg = max(3.5, (height - 4) / BRICK_SEGS)
+        brick = max(2.0, seg - 1.6)
         low = self._hex(mix_hex(self.palette.bg, self.palette.accent, 0.45))
         mid = self._hex(self.palette.accent)
         high = self._hex(self.palette.peak)

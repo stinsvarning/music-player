@@ -5,6 +5,8 @@ from music_player.spectrum import (
     BRICK_SEGS,
     bar_index_at,
     brick_columns,
+    field_band_at,
+    field_clearance,
     interpolate_bars,
     tick_brick_peaks,
     tick_peaks,
@@ -54,6 +56,19 @@ class PeakTests(unittest.TestCase):
         self.assertEqual(peaks[0], 8)
         fallen = tick_brick_peaks(peaks, [0, 0, 0])
         self.assertEqual(fallen[0], 7)
+
+
+class FieldTests(unittest.TestCase):
+    def test_bass_lights_the_edges(self):
+        bands = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        edge = field_band_at(20, 500, 500, bands)
+        center = field_band_at(500, 500, 500, bands)
+        self.assertGreater(edge, center)
+
+    def test_clearance_is_zero_inside_the_deck(self):
+        self.assertEqual(field_clearance(0, 0), 0.0)
+        self.assertGreater(field_clearance(300, 0), field_clearance(80, 0))
+        self.assertLessEqual(field_clearance(800, 800), 1.0)
 
 
 class HitTests(unittest.TestCase):

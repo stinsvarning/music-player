@@ -1,7 +1,32 @@
 from __future__ import annotations
 
-BRICK_COLS = 24
+BRICK_COLS = 48
 BRICK_SEGS = 12
+FIELD_COLS = 81
+CLEAR_REACH = 240.0
+CLEAR_CURVE = 3.0
+SPECTRUM_FLOOR = 0.08
+
+
+def field_band_at(cx: float, mid_x: float, half: float, bands: list[float]) -> float:
+    """Bass lives at the outer edges; treble toward the centered deck."""
+    n = len(bands)
+    if n == 0 or half <= 0:
+        return 0.0
+    side = min(1.0, abs(float(cx) - float(mid_x)) / float(half))
+    pos = (1.0 - side) * n - 0.5
+    b0 = max(0, min(n - 1, int(pos)))
+    b1 = min(n - 1, b0 + 1)
+    mix_b = max(0.0, min(1.0, pos - b0))
+    raw = float(bands[b0]) * (1.0 - mix_b) + float(bands[b1]) * mix_b
+    return max(0.0, (raw - SPECTRUM_FLOOR) / (1.0 - SPECTRUM_FLOOR))
+
+
+def field_clearance(dx: float, dy: float, reach: float = CLEAR_REACH) -> float:
+    if dx <= 0 and dy <= 0:
+        return 0.0
+    shade = min(1.0, (dx * dx + dy * dy) ** 0.5 / reach)
+    return shade**CLEAR_CURVE
 
 
 def interpolate_bars(bands: list[float], count: int = BRICK_COLS) -> list[float]:

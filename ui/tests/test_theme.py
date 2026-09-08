@@ -81,6 +81,8 @@ class OmarchyPaletteTests(unittest.TestCase):
         self.assertIn(".tab-caption", css)
         self.assertIn(".lcd", css)
         self.assertIn(".marquee", css)
+        self.assertIn(".deck", css)
+        self.assertIn(".stage", css)
         self.assertIn("button.seg", css)
         self.assertIn(".tab-page", css)
         self.assertNotIn("lyric-now", css)

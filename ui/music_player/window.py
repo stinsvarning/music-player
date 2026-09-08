@@ -41,11 +41,14 @@ from .theme import (
     omarchy_current_dir,
     omarchy_state_dir,
 )
+from .widgets.field import FieldView
 from .widgets.spectrum import SpectrumView
 
 ART_SIZE = 72
 WINDOW_W = 1180
 WINDOW_H = 880
+DECK_W = 1180
+DECK_H = 800
 
 __all__ = ["PlayerWindow", "bind_ellipsize", "constrain_scroll"]
 
@@ -120,33 +123,52 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
 
     def _build(self) -> None:
         self._install_header()
-        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        root.set_overflow(Gtk.Overflow.HIDDEN)
-        overlay = Gtk.Overlay()
-        overlay.set_child(root)
-        overlay.add_overlay(self._login_overlay())
-        self.set_child(overlay)
-        root.append(self._lcd())
-        root.append(self._transport())
+        self.field = FieldView()
+        stage = Gtk.Overlay()
+        stage.add_css_class("stage")
+        stage.set_child(self.field)
+        deck = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        deck.add_css_class("deck")
+        deck.set_size_request(DECK_W, DECK_H)
+        deck.set_halign(Gtk.Align.CENTER)
+        deck.set_valign(Gtk.Align.CENTER)
+        deck.set_overflow(Gtk.Overflow.HIDDEN)
+        deck.append(self._deck_bar())
+        deck.append(self._lcd())
+        deck.append(self._transport())
         self.body_box = self._body()
-        root.append(self.body_box)
-        root.append(self._footer())
+        deck.append(self.body_box)
+        deck.append(self._footer())
+        self.deck = deck
+        self.field.set_deck(deck)
+        stage.add_overlay(deck)
+        stage.add_overlay(self._login_overlay())
+        self.set_child(stage)
 
     def _install_header(self) -> None:
         bar = Gtk.HeaderBar()
-        # Suppress the default centered window title — identity lives in now-playing.
-        word = Gtk.Box(spacing=10)
+        bar.set_show_title_buttons(True)
+        bar.set_decoration_layout(":close")
+        bar.add_css_class("ghost-head")
+        bar.set_title_widget(Gtk.Box())
+        self.set_titlebar(bar)
+
+    def _deck_bar(self) -> Gtk.Widget:
+        bar = Gtk.Box(spacing=12)
+        bar.add_css_class("deck-bar")
         mark = Gtk.Label(label="MUSIC")
         mark.add_css_class("wordmark")
         tag = Gtk.Label(label="youtube music")
         tag.add_css_class("home-link")
-        word.append(mark)
-        word.append(tag)
-        bar.set_title_widget(word)
+        bar.append(mark)
+        bar.append(tag)
+        spacer = Gtk.Box()
+        spacer.set_hexpand(True)
+        bar.append(spacer)
         self.btn_account = self._icon_button("system-users-symbolic", "Account")
         self.btn_account.connect("clicked", self._on_account)
-        bar.pack_end(self.btn_account)
-        self.set_titlebar(bar)
+        bar.append(self.btn_account)
+        return bar
 
     def _install_icons(self) -> None:
         display = Gdk.Display.get_default()
@@ -166,6 +188,12 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
     def _lcd(self) -> Gtk.Widget:
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         box.add_css_class("lcd")
+        eyebrow = Gtk.Box()
+        live = Gtk.Label(label="youtube music", xalign=0)
+        live.add_css_class("artist")
+        live.set_hexpand(True)
+        eyebrow.append(live)
+        box.append(eyebrow)
         top = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
         self.art = Gtk.Picture()
         self.art.set_size_request(ART_SIZE, ART_SIZE)
@@ -173,10 +201,10 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, hexpand=True, valign=Gtk.Align.CENTER)
         self.track_title = Gtk.Label(label="Nothing playing", xalign=0)
         self.track_title.add_css_class("marquee")
-        bind_ellipsize(self.track_title, 56)
+        bind_ellipsize(self.track_title, 64)
         self.track_meta = Gtk.Label(label="YouTube Music", xalign=0)
         self.track_meta.add_css_class("artist")
-        bind_ellipsize(self.track_meta, 56)
+        bind_ellipsize(self.track_meta, 64)
         text.append(self.track_title)
         text.append(self.track_meta)
         clock = Gtk.Box(spacing=8, valign=Gtk.Align.END)
@@ -189,7 +217,6 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         clock.append(self.pos_label)
         clock.append(slash)
         clock.append(self.dur_label)
-        top.append(self.art)
         top.append(text)
         top.append(clock)
         box.append(top)
@@ -486,6 +513,8 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         self._palette = palette
         self._css.load_from_data(css_for(palette).encode())
         self.spectrum.set_palette(palette)
+        if getattr(self, "field", None) is not None:
+            self.field.set_palette(palette)
 
     def _paint(self) -> None:
         self._apply_palette(self._base_palette)
@@ -946,6 +975,8 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         if self.status.state != "playing":
             bands = [0.0] * 10
         self.spectrum.set_bands(bands)
+        if getattr(self, "field", None) is not None:
+            self.field.set_bands(bands)
         return False
 
     def _bind_song_menu(self, row: Gtk.ListBoxRow, track: Track, *, source: str) -> None:

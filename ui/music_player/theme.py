@@ -274,6 +274,25 @@ def css_for(palette: Palette) -> str:
             min-height: 36px;
             border-bottom: 1px solid {mix_hex(palette.bg, palette.muted, 0.4)};
         }}
+        headerbar.ghost-head {{
+            background: transparent;
+            min-height: 0;
+            padding: 2px 8px;
+            border: none;
+            box-shadow: none;
+        }}
+        .stage {{
+            background: {palette.bg};
+        }}
+        .deck {{
+            background: {palette.bg};
+            border: 1px solid {mix_hex(palette.bg, palette.muted, 0.45)};
+            min-width: 960px;
+        }}
+        .deck-bar {{
+            padding: 12px 18px;
+            border-bottom: 1px solid {mix_hex(palette.bg, palette.muted, 0.4)};
+        }}
         .wordmark {{
             letter-spacing: 0.34em;
             font-size: 11px;
@@ -321,6 +340,7 @@ def css_for(palette: Palette) -> str:
             min-width: 44px;
             min-height: 36px;
             border-radius: 0;
+            margin-left: -1px;
         }}
         button.play {{
             min-width: 74px;

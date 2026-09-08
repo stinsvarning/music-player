@@ -62,6 +62,8 @@ class WindowChromeTests(unittest.TestCase):
         self.assertTrue(self.win.body_box.get_visible())
         self.assertEqual(self.win.track_title.get_text(), "Nothing playing")
         self.assertIsNotNone(self.win.spectrum)
+        self.assertTrue(self.win.deck.has_css_class("deck"))
+        self.assertIsNotNone(self.win.field)
         _w, h = self.win.get_default_size()
         self.assertEqual(h, WINDOW_H)
 
