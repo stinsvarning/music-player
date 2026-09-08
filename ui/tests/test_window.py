@@ -48,6 +48,7 @@ class WindowChromeTests(unittest.TestCase):
         from music_player.models import PlayerStatus, playback_word
 
         self.assertEqual(self.win.btn_account.get_label(), "Account")
+        self.assertEqual(self.win.search_entry.get_placeholder_text(), "title or artist")
         self.assertEqual(self.win.status_label.get_text(), "stopped")
         self.win.status = PlayerStatus(state="paused")
         self.win._apply_status()

@@ -337,7 +337,7 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         find_l = Gtk.Label(label="FIND")
         find_l.add_css_class("find-l")
         self.search_entry = Gtk.Entry()
-        self.search_entry.set_placeholder_text("title or artist  ·  Enter searches YouTube")
+        self.search_entry.set_placeholder_text("title or artist")
         self.search_entry.set_hexpand(True)
         self.search_entry.add_css_class("find-i")
         self.search_entry.connect("activate", self._on_search)
