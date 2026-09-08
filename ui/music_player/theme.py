@@ -287,7 +287,13 @@ def css_for(palette: Palette) -> str:
         .deck {{
             background: {palette.bg};
             border: 1px solid {mix_hex(palette.bg, palette.muted, 0.45)};
-            min-width: 960px;
+            min-width: {1180}px;
+            min-height: {800}px;
+        }}
+        .vol-num {{
+            color: {palette.accent};
+            font-size: 18px;
+            min-width: 2em;
         }}
         .deck-bar {{
             padding: 12px 18px;

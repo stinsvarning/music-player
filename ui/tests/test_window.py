@@ -9,7 +9,7 @@ gi.require_version("Gdk", "4.0")
 from gi.repository import Gdk, GLib, Gtk
 
 from music_player.ipc import EngineIPC
-from music_player.window import WINDOW_H, PlayerWindow
+from music_player.window import DECK_W, WINDOW_H, PlayerWindow
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -66,6 +66,13 @@ class WindowChromeTests(unittest.TestCase):
         self.assertIsNotNone(self.win.field)
         _w, h = self.win.get_default_size()
         self.assertEqual(h, WINDOW_H)
+
+    def test_deck_width_does_not_follow_the_title(self):
+        before = self.win.deck.measure(Gtk.Orientation.HORIZONTAL, -1).natural
+        self.win.track_title.set_text("Very Long Song Title " * 12)
+        after = self.win.deck.measure(Gtk.Orientation.HORIZONTAL, -1).natural
+        self.assertLessEqual(after, DECK_W + 24)
+        self.assertLessEqual(abs(after - before), 24)
 
     def test_window_keys_are_handled(self):
         keys = [
