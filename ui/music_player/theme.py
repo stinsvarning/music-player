@@ -178,7 +178,7 @@ def boost_accent(value: str) -> str:
 
 
 def with_accent(palette: Palette, accent: str) -> Palette:
-    color = boost_accent(accent)
+    color = accent
     return Palette(
         name=palette.name,
         bg=palette.bg,
@@ -222,8 +222,8 @@ def palette_from_colors(colors: dict[str, str]) -> Palette:
     bg = colors.get("background") or colors.get("bg") or FALLBACK.bg
     fg = colors.get("foreground") or colors.get("fg") or FALLBACK.fg
     muted = colors.get("muted") or colors.get("dark_fg") or FALLBACK.muted
-    accent = boost_accent(colors.get("accent") or colors.get("blue") or colors.get("green") or FALLBACK.accent)
-    peak = colors.get("orange") or colors.get("yellow") or FALLBACK.peak
+    accent = colors.get("accent") or colors.get("blue") or colors.get("green") or FALLBACK.accent
+    peak = colors.get("orange") or colors.get("yellow") or accent
     panel = colors.get("lighter_bg") or mix_hex(bg, fg, 0.08)
     selection = colors.get("selection_background") or colors.get("selection")
     if selection and luminance(selection) < 0.45:

@@ -28,7 +28,7 @@ class OmarchyPaletteTests(unittest.TestCase):
         self.assertEqual(palette.name, "omarchy")
         self.assertEqual(palette.bg.lower(), "#060114")
         self.assertEqual(palette.fg.lower(), "#d7dbe9")
-        self.assertGreater(saturation(palette.accent), saturation("#757b9d"))
+        self.assertEqual(palette.accent.lower(), "#757b9d")
         self.assertNotEqual(palette.highlight.lower(), "#d7dbe9")
 
     def test_partial_toml_uses_fallback_slots(self):
@@ -71,9 +71,27 @@ class OmarchyPaletteTests(unittest.TestCase):
         self.assertNotEqual(boosted.lower(), raw)
         self.assertGreater(saturation(boosted), saturation(raw))
 
+    def test_palette_does_not_boost_theme_accent(self):
+        palette = palette_from_colors(
+            {
+                "background": "#060114",
+                "foreground": "#d7dbe9",
+                "accent": "#757b9d",
+                "muted": "#66656b",
+                "lighter_bg": "#1f1a2c",
+                "orange": "#ab9cb6",
+            }
+        )
+        self.assertEqual(palette.accent.lower(), "#757b9d")
+        self.assertEqual(palette.bg.lower(), "#060114")
+        self.assertEqual(palette.fg.lower(), "#d7dbe9")
+        self.assertEqual(palette.muted.lower(), "#66656b")
+        self.assertEqual(palette.panel.lower(), "#1f1a2c")
+        self.assertEqual(palette.peak.lower(), "#ab9cb6")
+
     def test_with_accent_retints_highlight(self):
         tinted = with_accent(FALLBACK, "#cc3344")
-        self.assertNotEqual(tinted.accent.lower(), FALLBACK.accent.lower())
+        self.assertEqual(tinted.accent.lower(), "#cc3344")
         self.assertNotEqual(tinted.highlight.lower(), FALLBACK.highlight.lower())
 
     def test_css_has_tab_caption_and_search(self):
