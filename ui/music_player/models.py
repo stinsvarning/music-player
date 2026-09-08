@@ -329,6 +329,14 @@ def is_login_error(text: str) -> bool:
     )
 
 
+def playback_word(state: str) -> str:
+    if state == "playing":
+        return "playing"
+    if state == "paused":
+        return "paused"
+    return "stopped"
+
+
 def parse_status(payload: dict[str, Any]) -> PlayerStatus:
     bands = [float(x) for x in (payload.get("eq_bands") or [])[:10]]
     while len(bands) < 10:

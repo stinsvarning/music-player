@@ -28,6 +28,7 @@ from .models import (
     format_time,
     is_login_error,
     parse_status,
+    playback_word,
     parse_tracks,
     queue_needs_rebuild,
     should_apply_engine_rating,
@@ -165,16 +166,15 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
     def _deck_bar(self) -> Gtk.Widget:
         bar = Gtk.Box(spacing=12)
         bar.add_css_class("deck-bar")
-        mark = Gtk.Label(label="MUSIC")
+        mark = Gtk.Label(label="Music Player")
         mark.add_css_class("wordmark")
-        tag = Gtk.Label(label="youtube music")
-        tag.add_css_class("home-link")
         bar.append(mark)
-        bar.append(tag)
         spacer = Gtk.Box()
         spacer.set_hexpand(True)
         bar.append(spacer)
-        self.btn_account = self._icon_button("system-users-symbolic", "Account")
+        self.btn_account = Gtk.Button(label="Account")
+        self.btn_account.add_css_class("flat")
+        self.btn_account.add_css_class("home-link")
         self.btn_account.connect("clicked", self._on_account)
         bar.append(self.btn_account)
         return bar
@@ -308,14 +308,14 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
     def _footer(self) -> Gtk.Widget:
         foot = Gtk.Box(spacing=10)
         foot.add_css_class("foot")
-        pulse = Gtk.Label(label="●")
-        pulse.add_css_class("pulse")
-        hint = Gtk.Label(label="playing")
-        hint.add_css_class("meta")
-        hint.set_xalign(0)
-        hint.set_hexpand(True)
-        foot.append(pulse)
-        foot.append(hint)
+        self.status_dot = Gtk.Label(label="●")
+        self.status_dot.add_css_class("pulse-off")
+        self.status_label = Gtk.Label(label="stopped")
+        self.status_label.add_css_class("meta")
+        self.status_label.set_xalign(0)
+        self.status_label.set_hexpand(True)
+        foot.append(self.status_dot)
+        foot.append(self.status_label)
         return foot
 
     def _body(self) -> Gtk.Widget:
@@ -392,7 +392,13 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
 
     def _queue_tab(self) -> Gtk.Widget:
         page = self._page()
-        bar, _left, _right = caption_bar()
+        bar, cap_l, cap_r = caption_bar()
+        q_lab = Gtk.Label(label="QUEUE", xalign=0)
+        q_lab.add_css_class("meta")
+        lyr_lab = Gtk.Label(label="LYRICS", xalign=0)
+        lyr_lab.add_css_class("meta")
+        cap_l.append(q_lab)
+        cap_r.append(lyr_lab)
         page.append(bar)
         panes = Gtk.Box(spacing=8, vexpand=True)
         left = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
@@ -411,8 +417,7 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         left.append(self.queue_scroll)
 
         right = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        right.set_hexpand(False)
-        right.set_size_request(260, -1)
+        right.set_hexpand(True)
         self.lyrics_empty = Gtk.Label(label="no lyrics", xalign=0)
         self.lyrics_empty.add_css_class("hint")
         self.lyrics_empty.set_margin_start(8)
@@ -784,6 +789,11 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
                 self.set_title(st.track.title or "Music")
             else:
                 self.set_title("Music")
+            word = playback_word(st.state)
+            self.status_label.set_text(word)
+            self.status_dot.remove_css_class("pulse")
+            self.status_dot.remove_css_class("pulse-off")
+            self.status_dot.add_css_class("pulse" if playing else "pulse-off")
         finally:
             self._syncing = False
 

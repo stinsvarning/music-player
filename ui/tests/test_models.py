@@ -18,6 +18,7 @@ from music_player.models import (
     parse_playlists,
     parse_status,
     parse_track,
+    playback_word,
     playlist_is_editable,
     playlist_menu_actions,
     should_apply_engine_rating,
@@ -177,6 +178,10 @@ class StatusParseTests(unittest.TestCase):
         self.assertFalse(st.automix)
         self.assertTrue(st.logged_in)
         self.assertEqual(st.auth_source, "firefox:~/.config/zen")
+        self.assertEqual(playback_word(st.state), "playing")
+        self.assertEqual(playback_word("paused"), "paused")
+        self.assertEqual(playback_word("stopped"), "stopped")
+        self.assertEqual(playback_word(""), "stopped")
 
     def test_parse_track_keeps_playable_flag(self):
         self.assertTrue(parse_track({"id": "a", "title": "ok"}).playable)

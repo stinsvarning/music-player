@@ -300,9 +300,10 @@ def css_for(palette: Palette) -> str:
             border-bottom: 1px solid {mix_hex(palette.bg, palette.muted, 0.4)};
         }}
         .wordmark {{
-            letter-spacing: 0.34em;
+            letter-spacing: 0.22em;
             font-size: 11px;
             color: {palette.fg};
+            text-transform: uppercase;
         }}
         .home-link {{
             letter-spacing: 0.24em;
@@ -389,6 +390,9 @@ def css_for(palette: Palette) -> str:
         }}
         .pulse {{
             color: {palette.accent};
+        }}
+        .pulse-off {{
+            color: {palette.muted};
         }}
         .login-veil {{
             background: {mix_hex(palette.bg, "#000000", 0.35)};

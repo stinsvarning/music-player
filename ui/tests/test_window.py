@@ -44,6 +44,24 @@ class WindowChromeTests(unittest.TestCase):
         state = Gdk.ModifierType.CONTROL_MASK if ctrl else 0
         return bool(self.win._on_key(None, keyval, 0, state))
 
+    def test_chrome_wording(self):
+        from music_player.models import PlayerStatus, playback_word
+
+        self.assertEqual(self.win.btn_account.get_label(), "Account")
+        self.assertEqual(self.win.status_label.get_text(), "stopped")
+        self.win.status = PlayerStatus(state="paused")
+        self.win._apply_status()
+        self.assertEqual(self.win.status_label.get_text(), playback_word("paused"))
+        self.win.status = PlayerStatus(state="playing")
+        self.win._apply_status()
+        self.assertEqual(self.win.status_label.get_text(), "playing")
+
+    def test_queue_and_library_share_two_columns(self):
+        self.assertTrue(self.win.queue_scroll.get_parent().get_hexpand())
+        self.assertTrue(self.win.lyrics_scroll.get_parent().get_hexpand())
+        self.assertTrue(self.win.playlist_list.get_parent().get_parent().get_hexpand())
+        self.assertTrue(self.win.track_list.get_parent().get_parent().get_hexpand())
+
     def test_queue_and_library_are_exclusive_body_modes(self):
         self.assertEqual(self.win.body_stack.get_visible_child_name(), "queue")
         self.assertTrue(self.win.btn_mode_queue.get_active())
