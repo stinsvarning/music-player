@@ -49,6 +49,13 @@ WINDOW_W = 1180
 WINDOW_H = 880
 DECK_W = 1180
 DECK_H = 800
+_ICON_MARK = {
+    "media-skip-backward-symbolic": ("go-previous-symbolic", "PREV"),
+    "media-skip-forward-symbolic": ("go-next-symbolic", "NEXT"),
+    "media-playlist-shuffle-symbolic": ("", "SHUF"),
+    "media-playlist-consecutive-symbolic": ("", "MIX"),
+    "alarm-symbolic": ("", "SLEEP"),
+}
 
 __all__ = ["PlayerWindow", "bind_ellipsize", "constrain_scroll"]
 
@@ -180,11 +187,20 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         root = Path(__file__).resolve().parent / "icons"
         theme.add_search_path(str(root))
 
-    def _icon_button(self, icon: str, tooltip: str, *, toggle: bool = False) -> Gtk.Button:
+    def _icon_button(self, icon: str, tooltip: str, *, toggle: bool = False, flat: bool = True) -> Gtk.Button:
         btn: Gtk.Button = Gtk.ToggleButton() if toggle else Gtk.Button()
-        btn.set_icon_name(icon)
         btn.set_tooltip_text(tooltip)
-        btn.add_css_class("flat")
+        alt, mark = _ICON_MARK.get(icon, ("", tooltip[:4].upper()))
+        display = Gdk.Display.get_default()
+        theme = Gtk.IconTheme.get_for_display(display) if display is not None else None
+        name = icon if theme is not None and theme.has_icon(icon) else alt
+        if name and theme is not None and theme.has_icon(name):
+            btn.set_icon_name(name)
+        else:
+            btn.set_label(mark)
+            btn.add_css_class("mark")
+        if flat:
+            btn.add_css_class("flat")
         return btn
 
     def _lcd(self) -> Gtk.Widget:
@@ -234,11 +250,11 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
     def _transport(self) -> Gtk.Widget:
         box = Gtk.Box(spacing=10)
         box.add_css_class("transport")
-        self.btn_prev = self._icon_button("media-skip-backward-symbolic", "Previous")
-        self.btn_play = self._icon_button("media-playback-start-symbolic", "Play")
+        self.btn_prev = self._icon_button("media-skip-backward-symbolic", "Previous", flat=False)
+        self.btn_play = self._icon_button("media-playback-start-symbolic", "Play", flat=False)
         self.btn_play.add_css_class("play")
-        self.btn_stop = self._icon_button("media-playback-stop-symbolic", "Stop")
-        self.btn_next = self._icon_button("media-skip-forward-symbolic", "Next")
+        self.btn_stop = self._icon_button("media-playback-stop-symbolic", "Stop", flat=False)
+        self.btn_next = self._icon_button("media-skip-forward-symbolic", "Next", flat=False)
         for btn in (self.btn_prev, self.btn_play, self.btn_stop, self.btn_next):
             btn.add_css_class("tb")
             box.append(btn)
@@ -325,13 +341,8 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         self.search_entry.set_hexpand(True)
         self.search_entry.add_css_class("find-i")
         self.search_entry.connect("activate", self._on_search)
-        slash = Gtk.Label(label="/")
-        slash.add_css_class("find-k")
-        spacer = Gtk.Box()
-        spacer.set_hexpand(False)
         bar.append(find_l)
         bar.append(self.search_entry)
-        bar.append(slash)
         box.append(bar)
         self.body_stack = Gtk.Stack()
         self.body_stack.set_vexpand(True)

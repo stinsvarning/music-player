@@ -347,17 +347,14 @@ def css_for(palette: Palette) -> str:
             min-height: 36px;
             border-radius: 0;
             margin-left: -1px;
+            color: {palette.fg};
+            background: {palette.bg};
+            border: 1px solid {mix_hex(palette.bg, palette.muted, 0.5)};
         }}
-        button.play {{
-            min-width: 74px;
-            background: {palette.accent};
-            color: {palette.bg};
-            border-color: {palette.accent};
-        }}
-        button.play:hover {{
-            background: {palette.peak};
-            border-color: {palette.peak};
-            color: {palette.bg};
+        button.mark {{
+            font-size: 9px;
+            letter-spacing: 0.14em;
+            padding: 0 8px;
         }}
         .knob-lbl, .find-l, .find-k {{
             letter-spacing: 0.18em;
@@ -454,9 +451,23 @@ def css_for(palette: Palette) -> str:
             background: transparent;
             border-color: transparent;
         }}
+        button.play {{
+            min-width: 74px;
+            background: {palette.accent};
+            color: {palette.bg};
+            border-color: {palette.accent};
+        }}
+        button.play:hover {{
+            background: {palette.peak};
+            border-color: {palette.peak};
+            color: {palette.bg};
+        }}
         button:hover {{
             border-color: {palette.accent};
             color: {palette.accent};
+        }}
+        button.play:hover {{
+            color: {palette.bg};
         }}
         button.active, button:checked, togglebutton:checked {{
             background: {palette.highlight};

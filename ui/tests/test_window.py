@@ -67,6 +67,26 @@ class WindowChromeTests(unittest.TestCase):
         _w, h = self.win.get_default_size()
         self.assertEqual(h, WINDOW_H)
 
+    def test_find_row_has_no_slash_chip(self):
+        bar = self.win.search_entry.get_parent()
+        child = bar.get_first_child()
+        while child is not None:
+            if isinstance(child, Gtk.Label) and child.get_text() == "/":
+                self.fail("slash find chip is still in the chrome")
+            child = child.get_next_sibling()
+
+    def test_transport_buttons_are_marked(self):
+        for btn in (
+            self.win.btn_prev,
+            self.win.btn_play,
+            self.win.btn_stop,
+            self.win.btn_next,
+            self.win.btn_shuf,
+            self.win.btn_auto,
+            self.win.btn_sleep,
+        ):
+            self.assertTrue(bool(btn.get_icon_name()) or bool(btn.get_label()), btn.get_tooltip_text())
+
     def test_deck_width_does_not_follow_the_title(self):
         before = self.win.deck.measure(Gtk.Orientation.HORIZONTAL, -1).natural
         self.win.track_title.set_text("Very Long Song Title " * 12)
