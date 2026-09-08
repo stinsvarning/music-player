@@ -6,10 +6,31 @@ gi.require_version("Gtk", "4.0")
 
 from gi.repository import Gtk
 
-from music_player.layout import caption_bar, make_row
+from music_player.layout import caption_bar, deck_scale, deck_size, make_row
 from music_player.library import LibraryMixin
 from music_player.login import LoginMixin
 from music_player.window import PlayerWindow, bind_ellipsize, constrain_scroll
+
+
+class DeckScaleTests(unittest.TestCase):
+    def test_about_one_on_1080p(self):
+        scale = deck_scale(1920, 1080)
+        self.assertGreaterEqual(scale, 0.9)
+        self.assertLessEqual(scale, 1.2)
+
+    def test_grows_on_a_large_panel_but_caps(self):
+        small = deck_scale(1920, 1080)
+        large = deck_scale(3840, 1600)
+        self.assertGreater(large, small)
+        self.assertLessEqual(large, 1.5)
+        w, h = deck_size(3840, 1600)
+        self.assertGreater(w, 1180)
+        self.assertGreater(h, 800)
+
+    def test_shrinks_on_a_small_panel(self):
+        scale = deck_scale(1366, 768)
+        self.assertLess(scale, 1.0)
+        self.assertGreaterEqual(scale, 0.75)
 
 
 class EllipsizeWidthTests(unittest.TestCase):

@@ -106,6 +106,12 @@ class OmarchyPaletteTests(unittest.TestCase):
         self.assertNotIn("lyric-now", css)
         self.assertIn("row.unplayable", css)
 
+    def test_css_fonts_grow_with_deck_scale(self):
+        small = css_for(FALLBACK, scale=1.0)
+        big = css_for(FALLBACK, scale=1.5)
+        self.assertIn("font-size: 36px", small)
+        self.assertIn("font-size: 54px", big)
+
 
 if __name__ == "__main__":
     unittest.main()

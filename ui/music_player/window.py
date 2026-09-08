@@ -14,7 +14,7 @@ gi.require_version("Gdk", "4.0")
 from gi.repository import Gdk, GdkPixbuf, Gio, GLib, GObject, Gtk
 
 from .ipc import EngineError, EngineIPC
-from .layout import bind_ellipsize, caption_bar, clear_list, constrain_scroll, make_row
+from .layout import bind_ellipsize, caption_bar, clear_list, constrain_scroll, deck_scale, deck_size, make_row
 from .library import LibraryMixin
 from .login import LoginMixin
 from .models import (
@@ -101,6 +101,7 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         self._playlists_token = 0
         self._notice = ""
         self._notice_until = 0.0
+        self._ui_scale = 1.0
 
         self._install_icons()
         Gtk.StyleContext.add_provider_for_display(
@@ -110,6 +111,7 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         )
         self._mapped = False
         self._build()
+        self._fit_deck()
         self._apply_palette(self._palette)
         self._watch_theme()
         self._bind_keys()
@@ -120,7 +122,43 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
             return
         self._mapped = True
         threading.Thread(target=self._pump, daemon=True).start()
+        GLib.idle_add(self._fit_deck)
         GLib.idle_add(self._bootstrap)
+        surface = self.get_surface()
+        if surface is not None:
+            surface.connect("notify::width", lambda *_a: GLib.idle_add(self._fit_deck))
+            surface.connect("notify::height", lambda *_a: GLib.idle_add(self._fit_deck))
+
+    def _monitor_px(self) -> tuple[int, int]:
+        display = self.get_display()
+        surface = self.get_surface()
+        mon = None
+        if display is not None and surface is not None:
+            mon = display.get_monitor_at_surface(surface)
+        if mon is None and display is not None:
+            mons = display.get_monitors()
+            if mons.get_n_items() > 0:
+                mon = mons.get_item(0)
+        if mon is None:
+            return 1920, 1080
+        geo = mon.get_geometry()
+        return int(geo.width), int(geo.height)
+
+    def _fit_deck(self) -> bool:
+        if getattr(self, "deck", None) is None:
+            return False
+        w, h = self._monitor_px()
+        scale = deck_scale(w, h)
+        dw, dh = deck_size(w, h)
+        req_w, req_h = self.deck.get_size_request()
+        if abs(scale - self._ui_scale) < 0.02 and req_w == dw and req_h == dh:
+            return False
+        self._ui_scale = scale
+        self.deck.set_size_request(dw, dh)
+        if getattr(self, "spectrum", None) is not None:
+            self.spectrum.set_content_height(max(48, int(84 * scale)))
+        self._apply_palette(self._palette)
+        return False
 
     def stop_pump(self) -> None:
         self._pump_stop.set()
@@ -535,7 +573,7 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
 
     def _apply_palette(self, palette: Palette) -> None:
         self._palette = palette
-        self._css.load_from_data(css_for(palette).encode())
+        self._css.load_from_data(css_for(palette, scale=getattr(self, "_ui_scale", 1.0)).encode())
         self.spectrum.set_palette(palette)
         if getattr(self, "field", None) is not None:
             self.field.set_palette(palette)
