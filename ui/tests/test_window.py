@@ -114,6 +114,17 @@ class WindowChromeTests(unittest.TestCase):
         self.assertLessEqual(after, req_w + 24)
         self.assertLessEqual(abs(after - before), 24)
 
+    def test_deck_stays_at_design_size(self):
+        from music_player.window import DECK_H, DECK_W
+
+        self.assertEqual(self.win.deck.get_size_request(), (DECK_W, DECK_H))
+        self.assertEqual((DECK_W, DECK_H), (1180, 800))
+        self.assertFalse(hasattr(self.win, "_fit_deck"))
+
+    def test_window_uses_hypr_chrome_not_gtk_csd(self):
+        self.assertIsNone(self.win.get_titlebar())
+        self.assertFalse(self.win.get_decorated())
+
     def test_window_keys_are_handled(self):
         keys = [
             (Gdk.KEY_space, False, {"cmd": "toggle"}),

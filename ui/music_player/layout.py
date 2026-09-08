@@ -6,22 +6,6 @@ gi.require_version("Gtk", "4.0")
 
 from gi.repository import Gtk, Pango
 
-DECK_DESIGN_W = 1180
-DECK_DESIGN_H = 800
-
-
-def deck_scale(avail_w: int, avail_h: int, *, cap: float = 1.5, floor: float = 0.75) -> float:
-    """Uniform scale for the centered card. ~1.0 on 1080p, capped on huge panels."""
-    if avail_w <= 0 or avail_h <= 0:
-        return 1.0
-    fit = min((avail_w * 0.72) / DECK_DESIGN_W, (avail_h * 0.82) / DECK_DESIGN_H)
-    return max(floor, min(cap, fit))
-
-
-def deck_size(avail_w: int, avail_h: int) -> tuple[int, int]:
-    scale = deck_scale(avail_w, avail_h)
-    return int(DECK_DESIGN_W * scale), int(DECK_DESIGN_H * scale)
-
 
 def bind_ellipsize(label: Gtk.Label, chars: int, *, hexpand: bool = True) -> Gtk.Label:
     """Keep long titles from driving the window's natural width."""

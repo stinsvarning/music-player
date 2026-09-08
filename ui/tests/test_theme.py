@@ -106,11 +106,15 @@ class OmarchyPaletteTests(unittest.TestCase):
         self.assertNotIn("lyric-now", css)
         self.assertIn("row.unplayable", css)
 
-    def test_css_fonts_grow_with_deck_scale(self):
-        small = css_for(FALLBACK, scale=1.0)
-        big = css_for(FALLBACK, scale=1.5)
-        self.assertIn("font-size: 36px", small)
-        self.assertIn("font-size: 54px", big)
+    def test_css_keeps_design_type_size(self):
+        css = css_for(FALLBACK)
+        self.assertIn("font-size: 36px", css)
+        self.assertNotIn("font-size: 54px", css)
+
+    def test_css_square_window_matches_hypr(self):
+        css = css_for(FALLBACK)
+        self.assertIn("border-radius: 0", css)
+        self.assertNotIn("ghost-head", css)
 
 
 if __name__ == "__main__":

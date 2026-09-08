@@ -250,9 +250,7 @@ def load_omarchy_palette(path: str | Path) -> Palette:
     return load_omarchy_palette_text(Path(path).read_text())
 
 
-def css_for(palette: Palette, scale: float = 1.0) -> str:
-    s = max(0.75, min(1.5, float(scale) or 1.0))
-    px = lambda n: max(1, int(round(n * s)))
+def css_for(palette: Palette) -> str:
     select = mix_hex(palette.bg, palette.muted, 0.45)
     return f"""
         :root {{
@@ -267,8 +265,10 @@ def css_for(palette: Palette, scale: float = 1.0) -> str:
         window, .app-window, headerbar {{
             background: {palette.bg};
             color: {palette.fg};
-            font-size: {px(12)}px;
+            font-size: 12px;
             font-family: "JetBrains Mono", "Space Grotesk", monospace;
+            border-radius: 0;
+            box-shadow: none;
         }}
         headerbar {{
             background: {palette.bg};
@@ -276,25 +276,18 @@ def css_for(palette: Palette, scale: float = 1.0) -> str:
             min-height: 36px;
             border-bottom: 1px solid {mix_hex(palette.bg, palette.muted, 0.4)};
         }}
-        headerbar.ghost-head {{
-            background: transparent;
-            min-height: 0;
-            padding: 2px 8px;
-            border: none;
-            box-shadow: none;
-        }}
         .stage {{
             background: {palette.bg};
         }}
         .deck {{
             background: {palette.bg};
             border: 1px solid {mix_hex(palette.bg, palette.muted, 0.45)};
-            min-width: {px(1180)}px;
-            min-height: {px(800)}px;
+            min-width: 1180px;
+            min-height: 800px;
         }}
         .vol-num {{
             color: {palette.accent};
-            font-size: {px(18)}px;
+            font-size: 18px;
             min-width: 2em;
         }}
         .deck-bar {{
@@ -303,13 +296,13 @@ def css_for(palette: Palette, scale: float = 1.0) -> str:
         }}
         .wordmark {{
             letter-spacing: 0.22em;
-            font-size: {px(11)}px;
+            font-size: 11px;
             color: {palette.fg};
             text-transform: uppercase;
         }}
         .home-link {{
             letter-spacing: 0.24em;
-            font-size: {px(10)}px;
+            font-size: 10px;
             color: {palette.muted};
         }}
         .chrome {{
@@ -323,23 +316,23 @@ def css_for(palette: Palette, scale: float = 1.0) -> str:
         }}
         .marquee {{
             color: {palette.accent};
-            font-size: {px(36)}px;
+            font-size: 36px;
             font-weight: 400;
             letter-spacing: 0.04em;
         }}
         .artist {{
             letter-spacing: 0.18em;
-            font-size: {px(11)}px;
+            font-size: 11px;
             color: {mix_hex(palette.muted, palette.accent, 0.35)};
             text-transform: uppercase;
         }}
         .clock {{
             color: {palette.accent};
-            font-size: {px(28)}px;
+            font-size: 28px;
         }}
         .dur {{
             color: {palette.muted};
-            font-size: {px(16)}px;
+            font-size: 16px;
         }}
         .transport {{
             padding: 12px 20px;
