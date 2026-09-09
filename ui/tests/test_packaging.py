@@ -29,10 +29,10 @@ class PackagingPathsTests(unittest.TestCase):
         text = (ROOT / "packaging" / "music-player.desktop").read_text()
         self.assertIn("Exec=music-player", text)
         self.assertIn("Name=Music", text)
-        self.assertIn("Version=0.1.0", text)
+        self.assertIn("Version=0.2.0", text)
 
     def test_release_files_exist(self):
-        self.assertEqual((ROOT / "VERSION").read_text().strip(), "0.1.0")
+        self.assertEqual((ROOT / "VERSION").read_text().strip(), "0.2.0")
         self.assertIn("MIT License", (ROOT / "LICENSE").read_text())
         uninstall = (ROOT / "packaging" / "uninstall.sh").read_text()
         self.assertIn("--purge-config", uninstall)

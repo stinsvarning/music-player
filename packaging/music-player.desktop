@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Version=0.1.0
+Version=0.2.0
 Name=Music
 Comment=YouTube Music player (Innertube + mpv)
 Exec=music-player

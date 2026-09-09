@@ -2,7 +2,7 @@
 
 A compact YouTube Music player for Arch: GTK4 window, Innertube engine, mpv for audio.
 
-**Version 0.1.0.** Unofficial. It uses a YouTube Music session from a browser on this computer. Not affiliated with Google or YouTube.
+**Version 0.2.0.** Unofficial. It uses a YouTube Music session from a browser on this computer. Not affiliated with Google or YouTube.
 
 Works on **Omarchy** and other Arch-family systems including **CachyOS**. The bar widget and Hyprland float rules are optional Omarchy extras.
 
