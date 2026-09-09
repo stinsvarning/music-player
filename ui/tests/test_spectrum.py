@@ -9,6 +9,8 @@ from music_player.spectrum import (
     cycle_vis,
     field_band_at,
     field_clearance,
+    field_level,
+    field_spec,
     interpolate_bars,
     tick_brick_peaks,
     tick_peaks,
@@ -97,11 +99,27 @@ class FieldTests(unittest.TestCase):
         edge = field_band_at(20, 500, 500, bands)
         center = field_band_at(500, 500, 500, bands)
         self.assertGreater(edge, center)
+        self.assertGreater(field_level(1.0, bands), field_level(0.0, bands))
 
     def test_clearance_is_zero_inside_the_deck(self):
         self.assertEqual(field_clearance(0, 0), 0.0)
         self.assertGreater(field_clearance(300, 0), field_clearance(80, 0))
         self.assertLessEqual(field_clearance(800, 800), 1.0)
+
+    def test_wave_field_is_radial_and_dense_at_the_edge(self):
+        bands = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        kw = dict(mid_x=400.0, mid_y=300.0, half=400.0, height=600.0, cell=8.0, bands=bands, t=0.4)
+        edge = field_spec("wave", cx=40.0, cy=300.0, **kw)
+        core = field_spec("wave", cx=400.0, cy=300.0, **kw)
+        self.assertGreater(edge, core)
+
+    def test_orbit_field_has_angular_contrast(self):
+        bands = [1.0] * 10
+        kw = dict(mid_x=400.0, mid_y=400.0, half=400.0, height=800.0, cell=8.0, bands=bands, t=0.0)
+        spoke = field_spec("orbit", cx=780.0, cy=400.0, **kw)
+        gap = field_spec("orbit", cx=668.0, cy=668.0, **kw)
+        self.assertGreater(spoke, gap)
+        self.assertGreater(spoke, 0.2)
 
 
 class HitTests(unittest.TestCase):

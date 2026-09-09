@@ -10,7 +10,7 @@ gi.require_version("Gtk", "4.0")
 
 from gi.repository import Gtk
 
-from music_player.spectrum import FIELD_COLS, VIS_MODES, field_band_at, field_clearance
+from music_player.spectrum import FIELD_COLS, VIS_MODES, field_clearance, field_spec
 from music_player.theme import Palette, mix_hex, palette_named
 
 BAYER = (
@@ -97,65 +97,12 @@ class FieldView(Gtk.DrawingArea):
                 deck_l, deck_t = bounds.get_x(), bounds.get_y()
                 deck_r = deck_l + bounds.get_width()
                 deck_b = deck_t + bounds.get_height()
-        if self.mode == "wave":
-            self._draw_wave(cr, width, height, deck_l, deck_t, deck_r, deck_b)
-            return
-        if self.mode == "orbit":
-            self._draw_orbit(cr, width, height, deck_l, deck_t, deck_r, deck_b)
-            return
-        self._draw_bricks(cr, width, height, deck_l, deck_t, deck_r, deck_b)
+        self._draw_cells(cr, width, height, deck_l, deck_t, deck_r, deck_b)
 
-    def _draw_wave(self, cr, width, height, deck_l, deck_t, deck_r, deck_b) -> None:
-        cx = (deck_l + deck_r) / 2 if deck_r > deck_l else width / 2
-        cy = (deck_t + deck_b) / 2 if deck_b > deck_t else height / 2
-        max_r = math.hypot(width, height)
-        t = time.monotonic()
-        accent = self._hex(self.palette.accent)
-        mid = self._hex(mix_hex(self.palette.bg, self.palette.accent, 0.55))
-        dim = self._hex(mix_hex(self.palette.bg, self.palette.accent, 0.28))
-        for i in range(22):
-            pulse = (t * 48 + i * 28) % (max_r * 0.55)
-            r = 40 + pulse
-            energy = self._amp * 0.7 + (self._bands[min(9, i % 10)] * 0.4)
-            if energy < 0.04:
-                continue
-            color = accent if energy > 0.35 else mid if energy > 0.16 else dim
-            cr.set_source_rgba(*color, min(0.55, 0.12 + energy * 0.5))
-            cr.set_line_width(1.2)
-            cr.arc(cx, cy, r, 0, math.tau)
-            cr.stroke()
-
-    def _draw_orbit(self, cr, width, height, deck_l, deck_t, deck_r, deck_b) -> None:
-        cx = (deck_l + deck_r) / 2 if deck_r > deck_l else width / 2
-        cy = (deck_t + deck_b) / 2 if deck_b > deck_t else height / 2
-        t = time.monotonic()
-        accent = self._hex(self.palette.accent)
-        peak = self._hex(self.palette.peak)
-        dim = self._hex(mix_hex(self.palette.bg, self.palette.accent, 0.35))
-        half = max(1.0, width / 2)
-        for ring in range(6):
-            count = 10 + ring * 7
-            base_r = 90 + ring * 48
-            spin = t * (0.18 + ring * 0.05)
-            for i in range(count):
-                ang = spin + i * math.tau / count
-                x = cx + math.cos(ang) * base_r
-                y = cy + math.sin(ang) * base_r
-                if deck_r > deck_l and deck_l - 8 < x < deck_r + 8 and deck_t - 8 < y < deck_b + 8:
-                    continue
-                level = field_band_at(x, cx, half, self._bands)
-                heat = level * 0.7 + self._amp * 0.35
-                if heat < 0.05:
-                    continue
-                size = 2.0 + heat * 3.5
-                color = peak if heat > 0.4 else accent if heat > 0.18 else dim
-                cr.set_source_rgb(*color)
-                cr.rectangle(x - size / 2, y - size / 2, size, size)
-                cr.fill()
-
-    def _draw_bricks(self, cr, width, height, deck_l, deck_t, deck_r, deck_b) -> None:
+    def _draw_cells(self, cr, width, height, deck_l, deck_t, deck_r, deck_b) -> None:
         cell = max(4.0, width / FIELD_COLS)
         mid_x = (deck_l + deck_r) / 2 if deck_r > deck_l else width / 2
+        mid_y = (deck_t + deck_b) / 2 if deck_b > deck_t else height / 2
         half = max(1.0, width / 2)
         dim = self._hex(mix_hex(self.palette.bg, self.palette.accent, 0.28))
         mid = self._hex(mix_hex(self.palette.bg, self.palette.accent, 0.55))
@@ -166,8 +113,6 @@ class FieldView(Gtk.DrawingArea):
         for col in range(-1, cols):
             x = col * cell
             cx = x + cell / 2
-            level = field_band_at(cx, mid_x, half, self._bands)
-            tall = level * (height / cell) * 0.92
             dx = max(deck_l - cx, 0.0, cx - deck_r) if deck_r > deck_l else 0.0
             for row in range(-1, rows):
                 y = row * cell
@@ -180,12 +125,20 @@ class FieldView(Gtk.DrawingArea):
                 tw = 0.5 + 0.5 * math.sin(t * 1.1 + j * 6.283)
                 base = 0.55 + 0.45 * JITTER[((row & 63) * 64 + (col & 63)) & 4095]
                 energy = shade * (0.30 + 0.52 * base * base + 0.18 * tw + self._amp * 0.22) * 0.34
-                spec = 0.0
-                if level > 0:
-                    up = (height - cy) / cell
-                    if 0 <= up < tall:
-                        spec = level * (1 - up / tall) ** 0.85
-                        energy += spec * 0.72 * min(1.0, shade * 3)
+                spec = field_spec(
+                    self.mode,
+                    cx=cx,
+                    cy=cy,
+                    mid_x=mid_x,
+                    mid_y=mid_y,
+                    half=half,
+                    height=height,
+                    cell=cell,
+                    bands=self._bands,
+                    t=t,
+                )
+                if spec > 0:
+                    energy += spec * 0.72 * min(1.0, shade * 3)
                 threshold = 0.78 * ((BAYER[(row & 7) * 8 + (col & 7)] + 0.5) / 64) + 0.22 * j
                 if energy <= threshold:
                     continue

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 BRICK_COLS = 48
 BRICK_SEGS = 12
 FIELD_COLS = 81
@@ -15,18 +17,62 @@ def cycle_vis(mode: str) -> str:
     return VIS_MODES[(VIS_MODES.index(mode) + 1) % len(VIS_MODES)]
 
 
-def field_band_at(cx: float, mid_x: float, half: float, bands: list[float]) -> float:
-    """Bass lives at the outer edges; treble toward the centered deck."""
+def field_level(side: float, bands: list[float]) -> float:
+    """side 0 is the deck/center (treble), 1 is the outer edge (bass)."""
     n = len(bands)
-    if n == 0 or half <= 0:
+    if n == 0:
         return 0.0
-    side = min(1.0, abs(float(cx) - float(mid_x)) / float(half))
-    pos = (1.0 - side) * n - 0.5
+    pos = (1.0 - min(1.0, max(0.0, float(side)))) * n - 0.5
     b0 = max(0, min(n - 1, int(pos)))
     b1 = min(n - 1, b0 + 1)
     mix_b = max(0.0, min(1.0, pos - b0))
     raw = float(bands[b0]) * (1.0 - mix_b) + float(bands[b1]) * mix_b
     return max(0.0, (raw - SPECTRUM_FLOOR) / (1.0 - SPECTRUM_FLOOR))
+
+
+def field_band_at(cx: float, mid_x: float, half: float, bands: list[float]) -> float:
+    """Bass lives at the outer edges; treble toward the centered deck."""
+    if half <= 0:
+        return 0.0
+    return field_level(abs(float(cx) - float(mid_x)) / float(half), bands)
+
+
+def field_spec(
+    mode: str,
+    *,
+    cx: float,
+    cy: float,
+    mid_x: float,
+    mid_y: float,
+    half: float,
+    height: float,
+    cell: float,
+    bands: list[float],
+    t: float,
+) -> float:
+    """0..1 extra light for one field cell. Same bass-at-edge mapping in every look."""
+    if mode == "wave":
+        dist = math.hypot(cx - mid_x, cy - mid_y)
+        reach = max(half, height * 0.5)
+        level = field_level(dist / max(1.0, reach), bands)
+        crest = 0.5 + 0.5 * math.sin(dist / max(1.0, cell) * 0.42 - t * 3.4)
+        return level * (0.22 + 0.78 * crest * crest)
+    if mode == "orbit":
+        dx = cx - mid_x
+        dy = cy - mid_y
+        dist = math.hypot(dx, dy)
+        reach = max(half, height * 0.5)
+        level = field_level(dist / max(1.0, reach), bands)
+        spoke = abs(math.cos((math.atan2(dy, dx) - t * 0.62) * 6.0)) ** 2.4
+        return level * (0.18 + 0.82 * spoke)
+    level = field_band_at(cx, mid_x, half, bands)
+    if level <= 0 or cell <= 0:
+        return 0.0
+    up = (height - cy) / cell
+    tall = level * (height / cell) * 0.92
+    if 0 <= up < tall:
+        return level * (1 - up / tall) ** 0.85
+    return 0.0
 
 
 def field_clearance(dx: float, dy: float, reach: float = CLEAR_REACH) -> float:

@@ -15,7 +15,6 @@ from music_player.spectrum import (
     VIS_MODES,
     bar_index_at,
     brick_columns,
-    interpolate_bars,
     tick_brick_peaks,
 )
 from music_player.theme import Palette, mix_hex, palette_named
@@ -94,45 +93,71 @@ class SpectrumView(Gtk.DrawingArea):
             return
         self._draw_bricks(cr, width, height)
 
-    def _draw_wave(self, cr: cairo.Context, width: int, height: int) -> None:
-        samples = interpolate_bars(self._bands, max(32, width // 4))
+    def _brick_colors(self):
+        low = self._hex(mix_hex(self.palette.bg, self.palette.accent, 0.45))
         mid = self._hex(self.palette.accent)
-        peak = self._hex(self.palette.peak)
-        cr.set_line_width(2.0)
-        cr.set_source_rgb(*mid)
-        cr.move_to(0, height * 0.5)
-        n = max(1, len(samples) - 1)
-        for i, v in enumerate(samples):
-            x = i / n * width
-            y = height * 0.5 - (v - 0.08) * height * 0.42
-            cr.line_to(x, y)
-        cr.stroke()
-        cr.set_source_rgba(*peak, 0.45)
-        cr.set_line_width(1.0)
-        cr.move_to(0, height * 0.5)
-        for i, v in enumerate(samples):
-            x = i / n * width
-            y = height * 0.5 + (v - 0.08) * height * 0.28
-            cr.line_to(x, y)
-        cr.stroke()
+        high = self._hex(self.palette.peak)
+        return low, mid, high
+
+    def _paint_brick(self, cr, *, on: bool, seg: int, hot: bool, low, mid, high) -> None:
+        if not on:
+            cr.set_source_rgba(*mid, 0.08)
+        elif seg >= 10:
+            cr.set_source_rgb(*(high if not hot else tuple(min(1.0, c * 1.2) for c in high)))
+        elif seg >= 6:
+            cr.set_source_rgb(*(mid if not hot else tuple(min(1.0, c * 1.15) for c in mid)))
+        else:
+            cr.set_source_rgb(*low)
+
+    def _draw_wave(self, cr: cairo.Context, width: int, height: int) -> None:
+        n = len(self._cols)
+        if n == 0:
+            return
+        gap = 1.5
+        col_w = max(2.0, (width - gap * (n + 1)) / n)
+        seg_h = max(3.0, (height / 2 - 3) / BRICK_SEGS)
+        brick = max(2.0, seg_h - 1.4)
+        low, mid, high = self._brick_colors()
+        mid_y = height / 2
+        for i, lit in enumerate(self._cols):
+            x = gap + i * (col_w + gap)
+            hot = i == self._hover
+            peak = self._peaks[i] if i < len(self._peaks) else lit
+            for s in range(BRICK_SEGS):
+                self._paint_brick(cr, on=s < lit or s + 1 == peak, seg=s, hot=hot, low=low, mid=mid, high=high)
+                cr.rectangle(x, mid_y - (s + 1) * seg_h + (seg_h - brick), col_w, brick)
+                cr.fill()
+                cr.rectangle(x, mid_y + s * seg_h, col_w, brick)
+                cr.fill()
 
     def _draw_orbit(self, cr: cairo.Context, width: int, height: int) -> None:
+        n = len(self._cols)
+        if n == 0:
+            return
         cx, cy = width / 2, height / 2
-        radius = min(width, height) * 0.42
-        mid = self._hex(self.palette.accent)
-        peak = self._hex(self.palette.peak)
-        low = self._hex(mix_hex(self.palette.bg, self.palette.accent, 0.45))
-        n = len(self._cols) or BRICK_COLS
+        radius = min(width, height) * 0.46
+        inner = radius * 0.22
+        step = (radius - inner) / BRICK_SEGS
+        brick = max(2.0, step - 1.5)
+        half_w = max(1.4, math.pi * radius / n * 0.38)
+        low, mid, high = self._brick_colors()
         for i, lit in enumerate(self._cols):
             ang = -math.pi / 2 + (i / n) * math.tau
-            inner = radius * 0.28
-            outer = inner + radius * 0.72 * (lit / max(1, BRICK_SEGS))
-            color = peak if lit >= 10 else mid if lit >= 6 else low
-            cr.set_source_rgb(*color)
-            cr.set_line_width(2.2)
-            cr.move_to(cx + math.cos(ang) * inner, cy + math.sin(ang) * inner)
-            cr.line_to(cx + math.cos(ang) * max(inner + 2, outer), cy + math.sin(ang) * max(inner + 2, outer))
-            cr.stroke()
+            ca, sa = math.cos(ang), math.sin(ang)
+            px, py = -sa, ca
+            hot = i == self._hover
+            peak = self._peaks[i] if i < len(self._peaks) else lit
+            for s in range(BRICK_SEGS):
+                self._paint_brick(cr, on=s < lit or s + 1 == peak, seg=s, hot=hot, low=low, mid=mid, high=high)
+                r0 = inner + s * step
+                r1 = r0 + brick
+                w = half_w * (0.45 + 0.55 * ((r0 + r1) / 2) / radius)
+                cr.move_to(cx + ca * r0 + px * w, cy + sa * r0 + py * w)
+                cr.line_to(cx + ca * r0 - px * w, cy + sa * r0 - py * w)
+                cr.line_to(cx + ca * r1 - px * w, cy + sa * r1 - py * w)
+                cr.line_to(cx + ca * r1 + px * w, cy + sa * r1 + py * w)
+                cr.close_path()
+                cr.fill()
 
     def _draw_bricks(self, cr: cairo.Context, width: int, height: int) -> None:
         n = len(self._cols)
@@ -151,14 +176,6 @@ class SpectrumView(Gtk.DrawingArea):
             peak = self._peaks[i] if i < len(self._peaks) else lit
             for s in range(BRICK_SEGS):
                 y = height - 2 - (s + 1) * seg
-                on = s < lit or s + 1 == peak
-                if not on:
-                    cr.set_source_rgba(*mid, 0.08)
-                elif s >= 10:
-                    cr.set_source_rgb(*(high if not hot else tuple(min(1.0, c * 1.2) for c in high)))
-                elif s >= 6:
-                    cr.set_source_rgb(*(mid if not hot else tuple(min(1.0, c * 1.15) for c in mid)))
-                else:
-                    cr.set_source_rgb(*low)
+                self._paint_brick(cr, on=s < lit or s + 1 == peak, seg=s, hot=hot, low=low, mid=mid, high=high)
                 cr.rectangle(x, y + (seg - brick), col_w, brick)
                 cr.fill()
