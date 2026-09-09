@@ -1,0 +1,21 @@
+pkgbase = music-player-git
+	pkgdesc = Standalone YouTube Music player (GTK + Innertube + mpv)
+	pkgver = 0.1.0.r0.gffc8f58
+	pkgrel = 1
+	url = https://github.com/stinsvarning/music-player
+	install = music-player-git.install
+	arch = any
+	license = MIT
+	makedepends = git
+	makedepends = npm
+	depends = python
+	depends = python-gobject
+	depends = gtk4
+	depends = mpv
+	depends = nodejs
+	provides = music-player
+	conflicts = music-player
+	source = git+https://github.com/stinsvarning/music-player.git
+	sha256sums = SKIP
+
+pkgname = music-player-git

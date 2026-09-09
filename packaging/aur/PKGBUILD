@@ -1,0 +1,53 @@
+# Maintainer: stinsvarning
+pkgname=music-player-git
+pkgver=0.1.0.r0.gffc8f58
+pkgrel=1
+pkgdesc="Standalone YouTube Music player (GTK + Innertube + mpv)"
+arch=('any')
+url="https://github.com/stinsvarning/music-player"
+license=('MIT')
+depends=('python' 'python-gobject' 'gtk4' 'mpv' 'nodejs' 'sqlite' 'yt-dlp')
+makedepends=('git' 'npm')
+provides=('music-player')
+conflicts=('music-player')
+install=music-player-git.install
+source=("git+https://github.com/stinsvarning/music-player.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd music-player
+  git describe --long --tags --abbrev=7 2>/dev/null | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g' \
+    || printf '0.1.0.r%s.g%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
+}
+
+build() {
+  cd music-player/engine
+  npm ci --omit=dev --cache "$srcdir/npm-cache"
+}
+
+package() {
+  cd music-player
+  local dest="$pkgdir/usr/lib/music-player"
+
+  install -d "$dest/engine" "$dest/ui"
+  install -m755 music-player "$dest/music-player"
+  install -m644 VERSION LICENSE "$dest/"
+
+  cp -a ui/music_player "$dest/ui/"
+  find "$dest/ui" -type d -name '__pycache__' -prune -exec rm -rf {} +
+
+  cp -a engine/src engine/bin engine/package.json engine/package-lock.json engine/node_modules "$dest/engine/"
+
+  install -Dm755 /dev/stdin "$pkgdir/usr/bin/music-player" <<'EOF'
+#!/bin/sh
+exec /usr/bin/python3 /usr/lib/music-player/music-player "$@"
+EOF
+
+  install -Dm644 packaging/music-player.desktop "$pkgdir/usr/share/applications/music-player.desktop"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+
+  install -d "$pkgdir/usr/share/music-player"
+  cp -a packaging/llurd.music "$pkgdir/usr/share/music-player/"
+  install -m644 packaging/hypr-window-rules.conf "$pkgdir/usr/share/music-player/music-player.lua"
+  install -m644 packaging/hypr-bindings.lua "$pkgdir/usr/share/music-player/hypr-bindings.lua"
+}

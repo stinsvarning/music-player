@@ -16,6 +16,7 @@ class PackagingPathsTests(unittest.TestCase):
             ROOT / "packaging" / "install.sh",
             ROOT / "packaging" / "uninstall.sh",
             ROOT / "packaging" / "hypr-bindings.lua",
+            ROOT / "packaging" / "aur" / "PKGBUILD",
             ROOT / "packaging" / "llurd.music" / "BarWidget.qml",
             ROOT / "music-player",
             Path(__import__("music_player.app", fromlist=["engine_entry"]).__file__),
@@ -43,6 +44,9 @@ class PackagingPathsTests(unittest.TestCase):
         self.assertNotIn("After you publish", readme)
         self.assertNotIn("cliamp", readme.lower())
         self.assertIn("github.com/stinsvarning/music-player", readme)
+        pkgbuild = (ROOT / "packaging" / "aur" / "PKGBUILD").read_text()
+        self.assertIn("pkgname=music-player-git", pkgbuild)
+        self.assertIn("github.com/stinsvarning/music-player", pkgbuild)
         self.assertFalse((ROOT / "docs/superpowers").exists())
 
     def test_engine_entry_is_beside_the_ui_tree(self):

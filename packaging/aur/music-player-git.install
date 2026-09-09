@@ -1,0 +1,11 @@
+post_install() {
+  echo "==> Music is on PATH as music-player."
+  echo "==> Optional Omarchy extras (not installed into your home):"
+  echo "    cp -a /usr/share/music-player/llurd.music ~/.config/omarchy/plugins/"
+  echo "    cp /usr/share/music-player/music-player.lua ~/.config/hypr/"
+  echo "    # Super+Shift+M: copy lines from /usr/share/music-player/hypr-bindings.lua"
+}
+
+post_upgrade() {
+  post_install
+}
