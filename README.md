@@ -10,21 +10,19 @@ Works on **Omarchy** and other Arch-family systems including **CachyOS**. The ba
 
 ![Queue](docs/screenshots/queue.png)
 
-![Equalizer](docs/screenshots/equalizer.png)
-
 ![Music](docs/screenshots/music.png)
 
 ## Features
 
-- Plays YouTube Music from the signed-in browser session on this computer
+- Plays YouTube Music from a signed-in browser on this computer (Zen, Firefox, Chrome, Brave, and others that are actually installed)
 - Queue, lyrics, search, and your playlists
 - Like the current track (syncs with Liked Music)
 - Right-click a playlist to rename, delete, or start a mix
 - Shuffle, repeat, play similar, and a sleep timer
-- Full-monitor view: centered deck on a music-reactive dotted field, LCD readout, brick meter
+- Full-monitor deck on a music-reactive field: LCD readout plus three vis looks (bricks, wave, orbit). Click the vis to cycle; the surround matches
 - Close or Super+W hides the window and audio keeps playing; Ctrl+Q quits
 - Follows the current Omarchy theme when those files exist
-- Optional Omarchy bar chip and Hyprland float rules
+- Optional Omarchy bar chip and Hyprland rules
 
 ## Needs
 
@@ -77,15 +75,15 @@ sudo pacman -S --needed python-gobject gtk4 mpv nodejs npm sqlite yt-dlp
 
 If `~/.config/omarchy` exists, install copies the Music bar widget to `~/.config/omarchy/plugins/llurd.music/`. Enable it in the bar if it is not listed.
 
-If `~/.config/hypr` exists, it writes `~/.config/hypr/music-player.lua` (float 920×720). Require that file from your Hyprland config if the window is not already floated. **Super+Shift+M** can raise or launch the player the same way the bar chip does — copy the two lines from `packaging/hypr-bindings.lua` into `~/.config/hypr/bindings.lua`. That key is Omarchy’s default Music shortcut (normally Spotify).
+If `~/.config/hypr` exists, it writes `~/.config/hypr/music-player.lua`. Open fills the monitor; **Super+T** toggles a compact 1180×880 float. **Super+Shift+M** can raise or launch the player the same way the bar chip does — copy the two lines from `packaging/hypr-bindings.lua` into `~/.config/hypr/bindings.lua`. That key is Omarchy’s default Music shortcut (normally Spotify).
 
 Missing Omarchy files does not prevent launch. The window follows the current Omarchy theme when present.
 
 ## First run
 
-If you are not signed in, the window shows a card. **Sign in** opens YouTube Music in your browser; the app picks up the session when it appears. **Check again** forces a new scan of local browsers.
+If you are not signed in, the window shows a card with every browser that has a profile on this computer. **Sign in with** that browser; YouTube Music opens there and the app reads that session. **Check again** re-scans.
 
-**Sign out** (person icon) forgets the saved session and stays signed out until you sign in again. The queue on disk is kept.
+**Account → Sign out** forgets the saved session and stays signed out until you sign in again. The queue on disk is kept.
 
 Optional override:
 
@@ -93,6 +91,7 @@ Optional override:
 # ~/.config/music-player/config.toml
 cookies_from = "auto"
 # cookies_from = "firefox:~/.config/zen"
+# vis_mode = "bricks"  # bricks | wave | orbit
 ```
 
 ## Window vs engine

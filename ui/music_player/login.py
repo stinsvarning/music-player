@@ -10,6 +10,8 @@ from gi.repository import Gio, GLib, Gtk
 
 from .models import login_status_text
 
+YTM_URL = "https://music.youtube.com"
+
 
 class LoginMixin:
     def _login_overlay(self) -> Gtk.Widget:
@@ -36,29 +38,76 @@ class LoginMixin:
         self.login_status = Gtk.Label(label="")
         self.login_status.add_css_class("hint")
         self.login_status.set_wrap(True)
-        open_btn = Gtk.Button(label="Sign in")
-        open_btn.connect("clicked", self._open_youtube_login)
+        self.login_browser_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        self.login_open_btn = Gtk.Button(label="Sign in")
+        self.login_open_btn.connect("clicked", lambda *_: self._open_youtube_login())
         done_btn = Gtk.Button(label="Check again")
         done_btn.add_css_class("flat")
         done_btn.connect("clicked", lambda *_: self._refresh_login())
         card.append(title)
         card.append(body)
         card.append(self.login_status)
-        card.append(open_btn)
+        card.append(self.login_browser_box)
+        card.append(self.login_open_btn)
         card.append(done_btn)
         veil.append(card)
         self.login_veil = veil
         veil.set_visible(False)
         return veil
 
-    def _open_youtube_login(self, *_a) -> None:
-        self.login_status.set_text("Sign in in the browser. This window will pick it up…")
+    def _fill_login_browsers(self, browsers: list | None) -> None:
+        box = getattr(self, "login_browser_box", None)
+        if box is None:
+            return
+        child = box.get_first_child()
+        while child is not None:
+            nxt = child.get_next_sibling()
+            box.remove(child)
+            child = nxt
+        rows = list(browsers or [])
+        for browser in rows:
+            label = browser.get("label") or "browser"
+            btn = Gtk.Button(label=f"Sign in with {label}")
+            btn.connect("clicked", lambda _b, spec=browser: self._open_youtube_login(spec))
+            box.append(btn)
+        if getattr(self, "login_open_btn", None) is not None:
+            self.login_open_btn.set_visible(not rows)
+
+    def _open_youtube_login(self, browser: dict | None = None) -> None:
+        spec = (browser or {}).get("spec") or ""
+        name = (browser or {}).get("label") or "the browser"
+        self._login_spec = spec
+        self.login_status.set_text(f"Sign in with {name}. This window will pick it up…")
         try:
-            Gio.AppInfo.launch_default_for_uri("https://music.youtube.com", None)
+            self._launch_youtube(browser or {})
         except Exception as exc:  # noqa: BLE001
             self.login_status.set_text(str(exc))
             return
         self._start_login_watch()
+
+    def _launch_youtube(self, browser: dict) -> None:
+        for desk in browser.get("desktop") or []:
+            name = desk if str(desk).endswith(".desktop") else f"{desk}.desktop"
+            try:
+                info = Gio.DesktopAppInfo.new(name)
+            except Exception:
+                info = None
+            if info is not None:
+                info.launch_uris([YTM_URL], None)
+                return
+        for bin_name in browser.get("bins") or []:
+            try:
+                info = Gio.AppInfo.create_from_commandline(
+                    str(bin_name),
+                    None,
+                    Gio.AppInfoCreateFlags.SUPPORTS_URIS,
+                )
+            except Exception:
+                continue
+            if info is not None:
+                info.launch_uris([YTM_URL], None)
+                return
+        Gio.AppInfo.launch_default_for_uri(YTM_URL, None)
 
     def _start_login_watch(self) -> None:
         if self._login_timer:
@@ -77,18 +126,19 @@ class LoginMixin:
         self._refresh_login()
         return True
 
-    def _refresh_login(self) -> None:
+    def _refresh_login(self, cookies_from: str | None = None) -> None:
         if self._login_busy:
             return
         self._login_busy = True
+        spec = cookies_from if cookies_from is not None else getattr(self, "_login_spec", "")
         self.login_status.set_text("Looking for a YouTube Music session…")
 
         def work() -> None:
             try:
-                result = self.ipc.request(
-                    {"cmd": "auth.refresh", "skip_saved": True, "force": True},
-                    timeout=25,
-                )
+                payload = {"cmd": "auth.refresh", "skip_saved": True, "force": True}
+                if spec:
+                    payload["cookies_from"] = spec
+                result = self.ipc.request(payload, timeout=25)
                 err = None
             except Exception as exc:  # noqa: BLE001
                 result = None
@@ -106,6 +156,7 @@ class LoginMixin:
             self._hide_login()
             self._load_playlists()
             return False
+        self._fill_login_browsers((payload or {}).get("browsers"))
         self.login_status.set_text(login_status_text(payload))
         return False
 

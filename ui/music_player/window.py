@@ -15,6 +15,8 @@ from gi.repository import Gdk, GdkPixbuf, Gio, GLib, GObject, Gtk
 
 from .ipc import EngineError, EngineIPC
 from .layout import bind_ellipsize, caption_bar, clear_list, constrain_scroll, make_row
+from .prefs import load_vis_mode, save_vis_mode
+from .spectrum import cycle_vis
 from .library import LibraryMixin
 from .login import LoginMixin
 from .models import (
@@ -109,7 +111,9 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
             Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
         )
         self._mapped = False
+        self._login_spec = ""
         self._build()
+        self._apply_vis(load_vis_mode())
         self._apply_palette(self._palette)
         self._watch_theme()
         self._bind_keys()
@@ -243,6 +247,7 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         box.append(top)
         self.spectrum = SpectrumView()
         self.spectrum.set_content_height(84)
+        self.spectrum.on_cycle = self._cycle_vis
         box.append(self.spectrum)
         return box
 
@@ -588,6 +593,7 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
             self._load_playlists()
             return False
         if err or (payload and payload.get("logged_in") is False):
+            self._fill_login_browsers((payload or {}).get("browsers"))
             self._show_login((payload or {}).get("error") or err or "", watch=True)
             self._set_account_tip(False, "")
             return False
@@ -999,6 +1005,19 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
                     row.remove_css_class("unplayable")
                 i += 1
             row = row.get_next_sibling()
+
+    def _apply_vis(self, mode: str) -> None:
+        if getattr(self, "spectrum", None) is not None:
+            self.spectrum.set_mode(mode)
+            self.spectrum.on_cycle = self._cycle_vis
+        if getattr(self, "field", None) is not None:
+            self.field.set_mode(mode)
+            self.field.on_cycle = self._cycle_vis
+
+    def _cycle_vis(self) -> None:
+        mode = cycle_vis(getattr(self.spectrum, "mode", "bricks"))
+        self._apply_vis(mode)
+        save_vis_mode(mode)
 
     def _on_bands(self, raw: dict | None) -> bool:
         bands = [float(x) for x in (raw.get("bands") or [])] if raw and raw.get("ok") else []

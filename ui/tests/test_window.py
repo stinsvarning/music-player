@@ -1,3 +1,5 @@
+import os
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -33,12 +35,19 @@ class WindowChromeTests(unittest.TestCase):
         cls.app.register()
 
     def setUp(self):
+        self._cfg = Path(tempfile.mkdtemp()) / "config.toml"
+        self._old_cfg = os.environ.get("MUSIC_PLAYER_CONFIG")
+        os.environ["MUSIC_PLAYER_CONFIG"] = str(self._cfg)
         self.win = PlayerWindow(self.app, FakeIpc())
         self.cmds = []
         self.win._queue_cmd = lambda payload, timeout=20.0: self.cmds.append(payload)
 
     def tearDown(self):
         self.win.stop_pump()
+        if self._old_cfg is None:
+            os.environ.pop("MUSIC_PLAYER_CONFIG", None)
+        else:
+            os.environ["MUSIC_PLAYER_CONFIG"] = self._old_cfg
 
     def _key(self, keyval, *, ctrl=False) -> bool:
         state = Gdk.ModifierType.CONTROL_MASK if ctrl else 0
@@ -125,6 +134,38 @@ class WindowChromeTests(unittest.TestCase):
         self.assertIsNone(self.win.get_titlebar())
         self.assertFalse(self.win.get_decorated())
 
+    def test_no_thumbs_down_control(self):
+        self.assertFalse(hasattr(self.win, "btn_dislike"))
+        icon = ROOT / "ui" / "music_player" / "icons" / "hicolor" / "scalable" / "actions" / "music-thumb-down-symbolic.svg"
+        self.assertFalse(icon.exists())
+
+    def test_clicking_the_vis_cycles_meter_and_field(self):
+        from music_player.spectrum import cycle_vis
+
+        self.assertEqual(self.win.spectrum.mode, "bricks")
+        self.assertEqual(self.win.field.mode, "bricks")
+        self.win._cycle_vis()
+        self.assertEqual(self.win.spectrum.mode, "wave")
+        self.assertEqual(self.win.field.mode, "wave")
+        self.win._cycle_vis()
+        self.assertEqual(self.win.spectrum.mode, cycle_vis("wave"))
+        self.assertEqual(self.win.field.mode, self.win.spectrum.mode)
+
+    def test_login_card_lists_browsers_on_this_computer(self):
+        self.win._fill_login_browsers(
+            [
+                {"id": "zen", "label": "Zen", "spec": "firefox:~/.config/zen", "desktop": ["zen"], "bins": ["zen-browser"]},
+                {"id": "brave", "label": "Brave", "spec": "brave:~/.config/BraveSoftware/Brave-Browser", "desktop": ["brave-browser"], "bins": ["brave"]},
+            ]
+        )
+        labels = []
+        child = self.win.login_browser_box.get_first_child()
+        while child is not None:
+            if isinstance(child, Gtk.Button):
+                labels.append(child.get_label())
+            child = child.get_next_sibling()
+        self.assertEqual(labels, ["Sign in with Zen", "Sign in with Brave"])
+
     def test_top_and_bottom_rails_are_the_same_height(self):
         top = self.win.deck.get_first_child()
         foot = self.win.deck.get_last_child()
@@ -192,6 +233,14 @@ class CompactSizeTests(unittest.TestCase):
         self.assertIn("music", text)
         self.assertNotIn("920, 720", text)
         self.assertNotIn("shade", text.lower())
+
+    def test_readme_matches_the_current_app(self):
+        text = (ROOT / "README.md").read_text()
+        self.assertNotIn("equalizer.png", text.lower())
+        self.assertNotIn("920×720", text)
+        self.assertNotIn("920x720", text)
+        self.assertIn("bricks", text.lower())
+        self.assertIn("Sign in with", text)
 
     def test_bar_raise_maximizes(self):
         text = (ROOT / "packaging" / "llurd.music" / "BarWidget.qml").read_text()

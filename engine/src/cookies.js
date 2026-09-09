@@ -36,19 +36,46 @@ export function hasYoutubeSession(header) {
 
 export function defaultBrowserCandidates(home) {
   const root = home || os.homedir();
+  const row = (id, label, browser, rel, desktop, bins) => ({
+    id,
+    label,
+    browser,
+    profileDir: path.join(root, rel),
+    desktop,
+    bins,
+  });
   return [
-    { browser: "firefox", profileDir: path.join(root, ".config/zen") },
-    { browser: "firefox", profileDir: path.join(root, ".var/app/app.zen_browser.zen/.zen") },
-    { browser: "firefox", profileDir: path.join(root, ".mozilla/firefox") },
-    { browser: "firefox", profileDir: path.join(root, ".var/app/org.mozilla.firefox/.mozilla/firefox") },
-    { browser: "firefox", profileDir: path.join(root, ".librewolf") },
-    { browser: "chrome", profileDir: path.join(root, ".config/google-chrome") },
-    { browser: "chromium", profileDir: path.join(root, ".config/chromium") },
-    { browser: "brave", profileDir: path.join(root, ".config/BraveSoftware/Brave-Browser") },
-    { browser: "edge", profileDir: path.join(root, ".config/microsoft-edge") },
-    { browser: "vivaldi", profileDir: path.join(root, ".config/vivaldi") },
-    { browser: "chrome", profileDir: path.join(root, ".config/helium") },
+    row("zen", "Zen", "firefox", ".config/zen", ["zen", "zen-browser", "app.zen_browser.zen"], ["zen-browser", "zen"]),
+    row("zen", "Zen", "firefox", ".var/app/app.zen_browser.zen/.zen", ["app.zen_browser.zen", "zen"], ["zen-browser", "zen"]),
+    row("firefox", "Firefox", "firefox", ".mozilla/firefox", ["firefox"], ["firefox"]),
+    row("firefox", "Firefox", "firefox", ".var/app/org.mozilla.firefox/.mozilla/firefox", ["org.mozilla.firefox", "firefox"], ["firefox"]),
+    row("librewolf", "LibreWolf", "firefox", ".librewolf", ["librewolf", "io.gitlab.librewolf-community"], ["librewolf"]),
+    row("chrome", "Chrome", "chrome", ".config/google-chrome", ["google-chrome", "google-chrome-stable"], ["google-chrome-stable", "google-chrome"]),
+    row("chromium", "Chromium", "chromium", ".config/chromium", ["chromium"], ["chromium"]),
+    row("brave", "Brave", "brave", ".config/BraveSoftware/Brave-Browser", ["brave-browser", "brave"], ["brave-browser", "brave"]),
+    row("edge", "Edge", "edge", ".config/microsoft-edge", ["microsoft-edge", "microsoft-edge-stable"], ["microsoft-edge-stable", "microsoft-edge"]),
+    row("vivaldi", "Vivaldi", "vivaldi", ".config/vivaldi", ["vivaldi-stable", "vivaldi"], ["vivaldi-stable", "vivaldi"]),
+    row("helium", "Helium", "chrome", ".config/helium", ["helium", "helium-browser"], ["helium-browser", "helium"]),
   ];
+}
+
+export function installedBrowsers(home) {
+  const seen = new Set();
+  const out = [];
+  for (const candidate of defaultBrowserCandidates(home)) {
+    if (!fs.existsSync(candidate.profileDir) || seen.has(candidate.id)) {
+      continue;
+    }
+    seen.add(candidate.id);
+    out.push({
+      id: candidate.id,
+      label: candidate.label,
+      spec: `${candidate.browser}:${candidate.profileDir}`,
+      desktop: candidate.desktop,
+      bins: candidate.bins,
+    });
+  }
+  return out;
 }
 
 export function slimCookieHeader(header) {

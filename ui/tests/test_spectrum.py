@@ -3,16 +3,49 @@ import unittest
 from music_player.spectrum import (
     BRICK_COLS,
     BRICK_SEGS,
+    VIS_MODES,
     bar_index_at,
     brick_columns,
+    cycle_vis,
     field_band_at,
     field_clearance,
     interpolate_bars,
     tick_brick_peaks,
     tick_peaks,
 )
+from music_player.prefs import load_vis_mode, save_vis_mode
 from music_player.theme import FALLBACK
+from music_player.widgets.field import FieldView
 from music_player.widgets.spectrum import SpectrumView
+
+
+class VisModeTests(unittest.TestCase):
+    def test_three_named_modes_cycle(self):
+        self.assertEqual(VIS_MODES, ("bricks", "wave", "orbit"))
+        self.assertEqual(cycle_vis("bricks"), "wave")
+        self.assertEqual(cycle_vis("wave"), "orbit")
+        self.assertEqual(cycle_vis("orbit"), "bricks")
+        self.assertEqual(cycle_vis("nope"), "bricks")
+
+    def test_meter_and_field_share_a_mode(self):
+        meter = SpectrumView()
+        field = FieldView()
+        self.assertEqual(meter.mode, "bricks")
+        self.assertEqual(field.mode, "bricks")
+        meter.set_mode("wave")
+        field.set_mode("wave")
+        self.assertEqual(meter.mode, "wave")
+        self.assertEqual(field.mode, "wave")
+
+    def test_vis_mode_round_trips_in_config_without_clobbering_cookies(self):
+        from pathlib import Path
+        import tempfile
+
+        path = Path(tempfile.mkdtemp()) / "config.toml"
+        path.write_text('cookies_from = "auto"\n')
+        save_vis_mode("orbit", path)
+        self.assertEqual(load_vis_mode(path), "orbit")
+        self.assertIn('cookies_from = "auto"', path.read_text())
 
 
 class InterpolateTests(unittest.TestCase):

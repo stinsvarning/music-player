@@ -8,7 +8,7 @@ export const COMMANDS = [
   { cmd: "status", risk: "read", args: [], summary: "Now playing, position, volume, EQ, sleep" },
   { cmd: "bands", risk: "read", args: [], summary: "In-memory spectrum bands" },
   { cmd: "auth.status", risk: "read", args: [], summary: "Whether a YouTube Music session is logged in" },
-  { cmd: "auth.refresh", risk: "dangerous", args: [arg("skip_saved", "boolean")], summary: "Re-scan browsers and replace the saved cookie header" },
+  { cmd: "auth.refresh", risk: "dangerous", args: [arg("skip_saved", "boolean"), arg("cookies_from", "string")], summary: "Re-scan browsers and replace the saved cookie header" },
   { cmd: "auth.logout", risk: "write", args: [], summary: "Forget the saved Google session and sign out" },
   { cmd: "play", risk: "write", args: [], summary: "Resume or start the current queue item" },
   { cmd: "pause", risk: "write", args: [], summary: "Pause playback" },

@@ -9,6 +9,7 @@ import {
   clearSignedOut,
   defaultBrowserCandidates,
   hasYoutubeSession,
+  installedBrowsers,
   isSignedOut,
   markSignedOut,
   resolveCookies,
@@ -144,6 +145,22 @@ test("defaultBrowserCandidates names Chromium as chromium not chrome", () => {
   assert.equal(chromium.browser, "chromium");
   const chrome = list.find((c) => c.profileDir.endsWith(".config/google-chrome"));
   assert.equal(chrome.browser, "chrome");
+});
+
+test("installedBrowsers lists only profiles on this computer, once per browser", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "music-installed-"));
+  fs.mkdirSync(path.join(home, ".config", "zen"), { recursive: true });
+  fs.mkdirSync(path.join(home, ".var", "app", "app.zen_browser.zen", ".zen"), { recursive: true });
+  fs.mkdirSync(path.join(home, ".config", "BraveSoftware", "Brave-Browser"), { recursive: true });
+  const list = installedBrowsers(home);
+  const ids = list.map((b) => b.id);
+  assert.deepEqual(ids, ["zen", "brave"]);
+  assert.equal(list[0].label, "Zen");
+  assert.equal(list[1].label, "Brave");
+  assert.match(list[0].spec, /^firefox:/);
+  assert.match(list[1].spec, /^brave:/);
+  assert.ok(Array.isArray(list[0].bins));
+  assert.ok(list[0].bins.length > 0);
 });
 
 test("defaultBrowserCandidates names Brave Edge and Vivaldi for yt-dlp", () => {

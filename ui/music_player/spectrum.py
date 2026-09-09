@@ -6,6 +6,13 @@ FIELD_COLS = 81
 CLEAR_REACH = 240.0
 CLEAR_CURVE = 3.0
 SPECTRUM_FLOOR = 0.08
+VIS_MODES = ("bricks", "wave", "orbit")
+
+
+def cycle_vis(mode: str) -> str:
+    if mode not in VIS_MODES:
+        return VIS_MODES[0]
+    return VIS_MODES[(VIS_MODES.index(mode) + 1) % len(VIS_MODES)]
 
 
 def field_band_at(cx: float, mid_x: float, half: float, bands: list[float]) -> float:

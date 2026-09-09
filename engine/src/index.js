@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import { AUTH_REFRESH_MS } from "./auth-error.js";
-import { LOGIN_REQUIRED, clearSavedHeader, clearSignedOut, isSignedOut, markSignedOut, resolveCookies, writeSavedHeader } from "./cookies.js";
+import { LOGIN_REQUIRED, clearSavedHeader, clearSignedOut, installedBrowsers, isSignedOut, markSignedOut, resolveCookies, writeSavedHeader } from "./cookies.js";
 import { Mpv } from "./mpv.js";
 import { UrlCache } from "./cache.js";
 import { listenHttp, loadOrCreateToken } from "./http.js";
@@ -51,22 +51,23 @@ function authSnapshot() {
     logged_in: Boolean(youtube.loggedIn),
     source: youtube.authSource || "",
     error: youtube.authError || "",
+    browsers: installedBrowsers(),
   };
 }
 
 let authInFlight = null;
 
-async function refreshAuth({ skipSaved = false, force = false } = {}) {
+async function refreshAuth({ skipSaved = false, force = false, cookiesFrom } = {}) {
   if (authInFlight) {
     return authInFlight;
   }
-  authInFlight = refreshAuthOnce({ skipSaved, force }).finally(() => {
+  authInFlight = refreshAuthOnce({ skipSaved, force, cookiesFrom }).finally(() => {
     authInFlight = null;
   });
   return authInFlight;
 }
 
-async function refreshAuthOnce({ skipSaved = false, force = false } = {}) {
+async function refreshAuthOnce({ skipSaved = false, force = false, cookiesFrom } = {}) {
   if (force) {
     clearSignedOut(signedOutPath());
   } else if (isSignedOut(signedOutPath())) {
@@ -75,7 +76,7 @@ async function refreshAuthOnce({ skipSaved = false, force = false } = {}) {
     return { ...authSnapshot(), signed_out: true };
   }
   const resolved = resolveCookies({
-    spec: readCookiesFromSetting(),
+    spec: cookiesFrom || readCookiesFromSetting(),
     savedPath: savedCookiesPath(),
     skipSaved,
   });
@@ -142,6 +143,7 @@ async function main() {
           await refreshAuth({
             skipSaved: Boolean(req.skip_saved),
             force: Boolean(req.force),
+            cookiesFrom: req.cookies_from,
           }),
         );
       }
