@@ -1,7 +1,9 @@
 import unittest
 
+from music_player.prefs import load_color_overrides
 from music_player.theme import (
     FALLBACK,
+    apply_color_overrides,
     boost_accent,
     css_for,
     load_omarchy_palette_text,
@@ -88,6 +90,43 @@ class OmarchyPaletteTests(unittest.TestCase):
         self.assertEqual(palette.muted.lower(), "#66656b")
         self.assertEqual(palette.panel.lower(), "#1f1a2c")
         self.assertEqual(palette.peak.lower(), "#ab9cb6")
+
+    def test_spacex_terrafab_uses_cyan_and_ice_not_slate(self):
+        palette = palette_from_colors(
+            {
+                "background": "#060114",
+                "foreground": "#D7DBE9",
+                "accent": "#757b9d",
+                "blue": "#757b9d",
+                "muted": "#66656b",
+                "orange": "#ab9cb6",
+                "yellow": "#c4f6ff",
+                "cyan": "#bad8ff",
+                "green": "#a1c4e4",
+                "selection_background": "#D7DBE9",
+                "lighter_bg": "#1f1a2c",
+            }
+        )
+        self.assertEqual(palette.accent.lower(), "#bad8ff")
+        self.assertEqual(palette.peak.lower(), "#c4f6ff")
+        self.assertNotEqual(palette.accent.lower(), "#757b9d")
+        self.assertNotEqual(palette.peak.lower(), "#ab9cb6")
+
+    def test_load_color_overrides_keeps_hex_only(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.toml"
+            path.write_text('vis_mode = "wave"\naccent = "#bad8ff"\npeak = "ice"\n')
+            self.assertEqual(load_color_overrides(path), {"accent": "#bad8ff"})
+
+    def test_config_override_replaces_theme_accent_and_peak(self):
+        base = palette_from_colors({"background": "#060114", "foreground": "#eeeeee", "accent": "#757b9d"})
+        tinted = apply_color_overrides(base, {"accent": "#bad8ff", "peak": "#c4f6ff"})
+        self.assertEqual(tinted.accent.lower(), "#bad8ff")
+        self.assertEqual(tinted.peak.lower(), "#c4f6ff")
+        self.assertEqual(tinted.bg, base.bg)
 
     def test_with_accent_retints_highlight(self):
         tinted = with_accent(FALLBACK, "#cc3344")

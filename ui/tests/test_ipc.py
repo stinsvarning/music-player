@@ -74,13 +74,19 @@ class EngineIPCTests(unittest.TestCase):
         if hasattr(self, "ipc"):
             self.ipc.close()
 
-    def test_reuses_one_connection_across_requests(self):
+    def test_reuses_one_connection_per_lane(self):
         self.server = LineServer()
         self.ipc = EngineIPC(self.server.path, timeout=2)
-        self.assertEqual(self.ipc.request({"cmd": "a"})["echo"], "a")
-        self.assertEqual(self.ipc.request({"cmd": "b"})["echo"], "b")
-        self.assertEqual(self.ipc.request({"cmd": "c"})["echo"], "c")
+        self.assertEqual(self.ipc.request({"cmd": "status"})["echo"], "status")
+        self.assertEqual(self.ipc.request({"cmd": "bands"})["echo"], "bands")
+        self.assertEqual(self.ipc.request({"cmd": "status"})["echo"], "status")
         self.assertEqual(self.server.accepts, 1)
+        self.assertEqual(self.ipc.request({"cmd": "search"})["echo"], "search")
+        self.assertEqual(self.ipc.request({"cmd": "playlists"})["echo"], "playlists")
+        self.assertEqual(self.server.accepts, 2)
+        self.assertEqual(self.ipc.request({"cmd": "next"})["echo"], "next")
+        self.assertEqual(self.ipc.request({"cmd": "pause"})["echo"], "pause")
+        self.assertEqual(self.server.accepts, 3)
 
     def test_reconnects_after_the_peer_drops(self):
         self.server = LineServer()
@@ -91,13 +97,32 @@ class EngineIPCTests(unittest.TestCase):
         self.assertEqual(self.ipc.request({"cmd": "again"})["echo"], "again")
         self.assertGreaterEqual(self.server.accepts, 2)
 
-    def test_serializes_concurrent_requests(self):
+    def test_status_is_not_blocked_by_a_slow_query(self):
+        self.server = LineServer()
+        self.ipc = EngineIPC(self.server.path, timeout=3)
+        done = threading.Event()
+
+        def slow() -> None:
+            self.ipc.request({"cmd": "search", "delay": 0.45})
+            done.set()
+
+        threading.Thread(target=slow, daemon=True).start()
+        time.sleep(0.05)
+        started = time.monotonic()
+        resp = self.ipc.request({"cmd": "status"})
+        elapsed = time.monotonic() - started
+        self.assertEqual(resp["echo"], "status")
+        self.assertLess(elapsed, 0.25)
+        self.assertTrue(done.wait(2))
+        self.assertGreaterEqual(self.server.accepts, 2)
+
+    def test_one_lane_stays_ordered(self):
         self.server = LineServer()
         self.ipc = EngineIPC(self.server.path, timeout=3)
         out: dict[int, int] = {}
 
         def worker(n: int) -> None:
-            out[n] = self.ipc.request({"cmd": "echo", "n": n, "delay": 0.05})["n"]
+            out[n] = self.ipc.request({"cmd": "search", "n": n, "delay": 0.05})["n"]
 
         threads = [threading.Thread(target=worker, args=(i,)) for i in (1, 2, 3)]
         for t in threads:

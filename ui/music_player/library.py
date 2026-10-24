@@ -14,6 +14,7 @@ from .models import (
     is_library_stale_error,
     page_done,
     parse_playlists,
+    play_from_context,
     parse_tracks,
     playlist_menu_actions,
     tracks_caption,
@@ -106,7 +107,7 @@ class LibraryMixin:
         click.connect("pressed", lambda g, *_a: self._show_playlist_menu(row, plist, g))
         row.add_controller(click)
 
-    def _show_playlist_menu(self, row: Gtk.ListBoxRow, plist, gesture) -> None:
+    def _popup_playlist_menu(self, row: Gtk.ListBoxRow, plist) -> None:
         self._dismiss_menu()
         pop = Gtk.Popover()
         pop.set_has_arrow(False)
@@ -115,6 +116,9 @@ class LibraryMixin:
         pop.set_parent(row)
         pop.popup()
         self._ctx_pop = pop
+
+    def _show_playlist_menu(self, row: Gtk.ListBoxRow, plist, gesture) -> None:
+        self._popup_playlist_menu(row, plist)
         gesture.set_state(Gtk.EventSequenceState.CLAIMED)
 
     def _fill_playlist_menu(self, pop: Gtk.Popover, row: Gtk.ListBoxRow, plist) -> None:
@@ -308,7 +312,7 @@ class LibraryMixin:
             self._show_notice("Can't play here — YouTube-only")
             return
         self._show_queue()
-        self._queue_cmd({"cmd": "track.play", "track": track.to_ipc()}, timeout=40)
+        self._queue_cmd(play_from_context(tracks, idx), timeout=40)
 
     def _on_search(self, *_a) -> None:
         if self.body_stack.get_visible_child_name() != "library":

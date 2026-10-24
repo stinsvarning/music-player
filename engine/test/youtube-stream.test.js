@@ -80,6 +80,19 @@ test("streamUrl fails after retries still have no audio", async () => {
   assert.equal(calls, 3);
 });
 
+test("streamUrl reuses a recent getInfo for the same id", async () => {
+  let calls = 0;
+  const yt = fakeSession(async () => {
+    calls += 1;
+    return { streaming_data: { adaptive_formats: [audioFormat("https://fresh.example/z")], formats: [] } };
+  });
+  assert.equal(await yt.streamUrl("abc"), "https://fresh.example/z");
+  assert.equal(await yt.streamUrl("abc"), "https://fresh.example/z");
+  assert.equal(calls, 1);
+  assert.equal(await yt.streamUrl("other"), "https://fresh.example/z");
+  assert.equal(calls, 2);
+});
+
 test("streamUrl does not retry a playability block", async () => {
   let calls = 0;
   const yt = fakeSession(async () => {

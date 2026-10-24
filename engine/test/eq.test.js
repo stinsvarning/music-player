@@ -3,6 +3,7 @@ import { test } from "node:test";
 import {
   BANDS_HZ,
   PRESETS,
+  VIS_BANDS_HZ,
   bandsFromMetadata,
   dbToUnit,
   flattenAfMetadata,
@@ -50,7 +51,20 @@ test("lavfi graph keeps the equalizer and adds a spectrum tap", () => {
   assert.match(graph, /astats=metadata=1/);
   assert.match(graph, /anullsink/);
   assert.match(graph, /ametadata=mode=print:file='\/tmp\/spectrum\/0'/);
-  assert.match(graph, /bandpass=f=60/);
+  assert.match(graph, new RegExp(`bandpass=f=${VIS_BANDS_HZ[0]}`));
+  assert.doesNotMatch(graph, /bandpass=f=12000/);
+});
+
+test("visualizer bands are log spaced and separate from the equalizer", () => {
+  assert.equal(VIS_BANDS_HZ.length, 10);
+  assert.equal(VIS_BANDS_HZ[0], 40);
+  assert.equal(VIS_BANDS_HZ.at(-1), 16000);
+  const visSpread = VIS_BANDS_HZ.at(-1) - VIS_BANDS_HZ.at(-3);
+  const eqSpread = BANDS_HZ.at(-1) - BANDS_HZ.at(-3);
+  assert.ok(visSpread > eqSpread);
+  for (let i = 1; i < VIS_BANDS_HZ.length; i += 1) {
+    assert.ok(VIS_BANDS_HZ[i] > VIS_BANDS_HZ[i - 1]);
+  }
 });
 
 test("dbToUnit maps silence and peaks", () => {

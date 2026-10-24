@@ -87,6 +87,17 @@ test("playNext inserts immediately after the current track", () => {
   );
 });
 
+test("playContext keeps the surrounding tracks and starts at index", async () => {
+  const { player } = makePlayer();
+  player.setAutomix("off");
+  await player.playContext([track("a"), track("b"), track("c")], 1);
+  assert.deepEqual(
+    player.queue.map((t) => t.id),
+    ["a", "b", "c"],
+  );
+  assert.equal(player.index, 1);
+});
+
 test("playTrack replaceQueue leaves only the chosen track", async () => {
   const { player } = makePlayer();
   player.setAutomix("off");

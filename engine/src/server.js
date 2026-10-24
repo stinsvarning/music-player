@@ -140,7 +140,12 @@ export async function dispatch(player, youtube, req) {
       await player.playIndex(req.index);
       return ok();
     case "track.play":
-      await player.playTrack(req.track, { replaceQueue: req.replace !== false });
+      if (Array.isArray(req.tracks) && req.tracks.length) {
+        const at = req.index != null ? req.index : req.tracks.findIndex((row) => row?.id === req.track?.id);
+        await player.playContext(req.tracks, at);
+      } else {
+        await player.playTrack(req.track, { replaceQueue: req.replace !== false });
+      }
       return ok({ total: player.queue.length, index: player.index });
     case "sleep":
       player.setSleep(req.minutes ?? req.value ?? 0);
