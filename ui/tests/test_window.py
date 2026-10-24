@@ -224,6 +224,15 @@ class WindowChromeTests(unittest.TestCase):
         self.assertEqual(self.win.spectrum.mode, cycle_vis("wave"))
         self.assertEqual(self.win.field.mode, self.win.spectrum.mode)
 
+    def test_hand_edited_vis_mode_applies_live(self):
+        self._cfg.write_text('vis_mode = "orbit"\n')
+        self.win._reload_config()
+        self.assertEqual(self.win.spectrum.mode, "waterfall")
+        self.assertEqual(self.win.field.mode, "waterfall")
+        self._cfg.write_text('vis_mode = "wave"\n')
+        self.win._reload_config()
+        self.assertEqual(self.win.spectrum.mode, "wave")
+
     def test_login_card_lists_browsers_on_this_computer(self):
         self.win._fill_login_browsers(
             [
