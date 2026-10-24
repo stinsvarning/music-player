@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from .spectrum import VIS_MODES
+from .spectrum import VIS_MODES, normalize_vis
 
 
 def config_path() -> Path:
@@ -64,15 +64,12 @@ def load_vis_mode(path: Path | None = None) -> str:
         line = raw.split("#", 1)[0].strip()
         if line.lower().startswith("vis_mode"):
             _, _, val = line.partition("=")
-            mode = val.strip().strip("\"'")
-            if mode in VIS_MODES:
-                return mode
+            return normalize_vis(val.strip().strip("\"'"))
     return VIS_MODES[0]
 
 
 def save_vis_mode(mode: str, path: Path | None = None) -> None:
-    if mode not in VIS_MODES:
-        mode = VIS_MODES[0]
+    mode = normalize_vis(mode)
     file = path or config_path()
     try:
         text = file.read_text()
