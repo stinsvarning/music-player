@@ -1,5 +1,20 @@
 export const BANDS_HZ = [60, 170, 310, 600, 1000, 3000, 6000, 12000, 14000, 16000];
 
+export function logSpacedHz(low, high, count) {
+  const n = Math.max(1, count | 0);
+  const start = Math.log(Math.max(1, low));
+  const end = Math.log(Math.max(low + 1, high));
+  const out = [];
+  for (let i = 0; i < n; i += 1) {
+    const t = n === 1 ? 0 : i / (n - 1);
+    out.push(Math.round(Math.exp(start + (end - start) * t)));
+  }
+  return out;
+}
+
+// Visualizer taps only. The equalizer stays on BANDS_HZ.
+export const VIS_BANDS_HZ = logSpacedHz(40, 16000, 10);
+
 export const PRESETS = {
   Flat: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
   Warm: [2, 2, 1, 0, 0, 0, 0, 1, 1, 1],
@@ -26,8 +41,8 @@ export function lavfiEqualizer(gains, metaDir = "") {
   if (!metaDir) {
     return `lavfi=[${eq}]`;
   }
-  const taps = BANDS_HZ.map((_, i) => `[s${i}]`).join("");
-  const splits = BANDS_HZ.map((hz, i) => {
+  const taps = VIS_BANDS_HZ.map((_, i) => `[s${i}]`).join("");
+  const splits = VIS_BANDS_HZ.map((hz, i) => {
     const dest = escapeLavfiPath(spectrumBandFile(metaDir, i));
     return (
       `[s${i}]bandpass=f=${hz}:width_type=q:w=1.2,` +
@@ -36,7 +51,7 @@ export function lavfiEqualizer(gains, metaDir = "") {
       `anullsink`
     );
   }).join(";");
-  return `lavfi=[asplit=2[main][spec];[spec]asplit=10${taps};${splits};[main]${eq}]`;
+  return `lavfi=[asplit=2[main][spec];[spec]asplit=${VIS_BANDS_HZ.length}${taps};${splits};[main]${eq}]`;
 }
 
 export function spectrumBandFile(metaDir, index) {

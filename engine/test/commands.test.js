@@ -75,6 +75,23 @@ test("track.play does not start a mix when Play similar is on", async () => {
   assert.deepEqual(player.played.opts, { replaceQueue: true });
 });
 
+test("track.play with a list starts that context at index", async () => {
+  const player = {
+    queue: [],
+    index: -1,
+    async playContext(tracks, index) {
+      player.queue = tracks;
+      player.index = index;
+    },
+  };
+  const tracks = [{ id: "a" }, { id: "b" }, { id: "c" }];
+  const resp = await dispatch(player, {}, { cmd: "track.play", track: tracks[1], tracks, index: 1 });
+  assert.equal(resp.ok, true);
+  assert.equal(resp.index, 1);
+  assert.equal(resp.total, 3);
+  assert.deepEqual(player.queue.map((row) => row.id), ["a", "b", "c"]);
+});
+
 test("help returns the catalog without needing a player", async () => {
   const resp = await dispatch({}, {}, { cmd: "help" });
   assert.equal(resp.ok, true);

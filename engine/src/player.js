@@ -1,6 +1,6 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { UrlCache } from "./cache.js";
-import { PRESETS, dbToUnit, lavfiEqualizer, parseAmetadataLog, spectrumBandFile } from "./eq.js";
+import { PRESETS, VIS_BANDS_HZ, dbToUnit, lavfiEqualizer, parseAmetadataLog, spectrumBandFile } from "./eq.js";
 import fs from "node:fs";
 import { spectrumDir } from "./paths.js";
 import { isUnplayableError, unplayableError } from "./playable.js";
@@ -32,7 +32,7 @@ export class Player {
     this._skipDepth = 0;
     this.readBands = typeof readBands === "function" ? readBands : null;
     this._sleep = delay;
-    this._bands = Array(10).fill(0);
+    this._bands = Array(VIS_BANDS_HZ.length).fill(0);
     this._bandsUntil = 0;
     this._bandsTimer = null;
     if (typeof this.mpv?.onEvent === "function") {
@@ -152,6 +152,20 @@ export class Player {
     }
     await this.#loadCurrent();
     this.#saveSession();
+  }
+
+  async playContext(tracks, index = 0) {
+    const rows = (Array.isArray(tracks) ? tracks : []).map(normalize).filter((row) => row.id);
+    if (!rows.length) {
+      throw new Error("track id is required");
+    }
+    let at = Number(index);
+    if (!Number.isFinite(at)) {
+      at = 0;
+    }
+    at = Math.min(rows.length - 1, Math.max(0, Math.trunc(at)));
+    this.replaceQueue(rows, at);
+    await this.playIndex(at);
   }
 
   queueTrack(track) {
@@ -384,7 +398,7 @@ export class Player {
   async bands() {
     this._bandsUntil = Date.now() + 400;
     if (this.state !== "playing") {
-      this._bands = Array(10).fill(0);
+      this._bands = Array(VIS_BANDS_HZ.length).fill(0);
       return [...this._bands];
     }
     this.#ensureBandsTimer();
@@ -401,8 +415,9 @@ export class Player {
   #sampleBands() {
     const reader = typeof this.readBands === "function" ? this.readBands : () => readSpectrumBands(spectrumDir());
     const next = reader();
-    this._bands = Array.isArray(next) && next.length ? next.slice(0, 10) : Array(10).fill(0);
-    while (this._bands.length < 10) {
+    const width = VIS_BANDS_HZ.length;
+    this._bands = Array.isArray(next) && next.length ? next.slice(0, width) : Array(width).fill(0);
+    while (this._bands.length < width) {
       this._bands.push(0);
     }
   }
@@ -418,7 +433,7 @@ export class Player {
         return;
       }
       if (this.state !== "playing") {
-        this._bands = Array(10).fill(0);
+        this._bands = Array(VIS_BANDS_HZ.length).fill(0);
         return;
       }
       this.#sampleBands();
@@ -829,7 +844,7 @@ export class Player {
 
 function readSpectrumBands(dir) {
   const bands = [];
-  for (let i = 0; i < 10; i += 1) {
+  for (let i = 0; i < VIS_BANDS_HZ.length; i += 1) {
     bands.push(readSpectrumBand(spectrumBandFile(dir, i)));
   }
   return bands;

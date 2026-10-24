@@ -1,5 +1,7 @@
 import os
+import subprocess
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -93,7 +95,54 @@ class EngineSupervisorTests(unittest.TestCase):
                     EngineSupervisor(binary="node", socket_path=sock, ipc=ipc).ensure()
             env = captured["kwargs"]["env"]
             self.assertEqual(env["MUSIC_PLAYER_SOCK"], sock)
-            self.assertIsNone(captured["kwargs"].get("stderr"))
+            self.assertIs(captured["kwargs"].get("stderr"), subprocess.PIPE)
+
+    def test_ensure_reports_stderr_when_the_engine_exits(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sock = str(Path(tmp) / "engine.sock")
+            ipc = FakeIpc(alive=False)
+
+            class Err:
+                def __init__(self):
+                    self._lines = [b"boom: missing module\n", b""]
+
+                def readline(self):
+                    return self._lines.pop(0) if self._lines else b""
+
+            class Proc:
+                def __init__(self):
+                    self.stderr = Err()
+
+                def poll(self):
+                    return 1
+
+            sup = EngineSupervisor(binary="node", socket_path=sock, ipc=ipc)
+            with patch("subprocess.Popen", return_value=Proc()):
+                with self.assertRaises(RuntimeError) as caught:
+                    sup.ensure(timeout=1)
+            self.assertIn("boom: missing module", str(caught.exception))
+
+    def test_activate_presents_the_window_before_ensure(self):
+        from music_player.app import MusicApplication
+
+        order: list[str] = []
+        window = type("Win", (), {})()
+        window.present = lambda: order.append("present")
+        window.connect = lambda *_a: None
+        gate = threading.Event()
+
+        class Sup:
+            def ensure(self):
+                order.append("ensure")
+                gate.set()
+
+        app = MusicApplication()
+        with patch("music_player.app.PlayerWindow", return_value=window):
+            with patch("music_player.app.EngineSupervisor", return_value=Sup()):
+                with patch("music_player.app.EngineIPC"):
+                    app.do_activate()
+        self.assertTrue(gate.wait(2))
+        self.assertEqual(order, ["present", "ensure"])
 
     def test_ensure_waits_instead_of_spawning_when_peer_exists(self):
         with tempfile.TemporaryDirectory() as tmp:

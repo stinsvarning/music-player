@@ -1,5 +1,7 @@
 import os
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -164,6 +166,47 @@ class WindowChromeTests(unittest.TestCase):
         self.assertFalse(self.win.lyrics_list.get_visible())
         self.assertEqual(self.win.lyrics_empty.get_text(), "no lyrics")
 
+    def test_footer_keeps_progress_across_a_status_tick(self):
+        from music_player.models import PlayerStatus
+
+        self.win._set_footer("searching weezer…")
+        self.assertEqual(self.win.status_label.get_text(), "searching weezer…")
+        self.assertTrue(self.win.status_label.has_css_class("foot-progress"))
+        self.win.status = PlayerStatus(state="playing")
+        self.win._apply_status()
+        self.assertEqual(self.win.status_label.get_text(), "searching weezer…")
+        self.win._set_footer("could not search")
+        self.assertTrue(self.win.status_label.has_css_class("foot-error"))
+        self.win._set_footer("offline")
+        self.assertEqual(self.win.status_label.get_text(), "offline")
+        self.assertTrue(self.win.status_label.has_css_class("foot-offline"))
+
+    def test_question_mark_toggles_the_key_card(self):
+        self.assertFalse(self.win._help_veil.get_visible())
+        self.assertTrue(self._key(Gdk.KEY_question))
+        self.assertTrue(self.win._help_veil.get_visible())
+        labels = []
+        card = self.win._help_veil.get_first_child()
+        child = card.get_first_child()
+        while child is not None:
+            if isinstance(child, Gtk.Label):
+                labels.append(child.get_text())
+            child = child.get_next_sibling()
+        self.assertTrue(any("delete" in line for line in labels))
+        self.assertTrue(self._key(Gdk.KEY_Escape))
+        self.assertFalse(self.win._help_veil.get_visible())
+
+    def test_delete_removes_the_selected_queue_row(self):
+        from music_player.models import Track
+
+        self.win._queue = [Track(id="a", title="A"), Track(id="b", title="B")]
+        self.win._render_queue(self.win._queue, 0)
+        row = self.win.queue_list.get_row_at_index(1)
+        self.win.queue_list.select_row(row)
+        self.cmds.clear()
+        self.assertTrue(self._key(Gdk.KEY_Delete))
+        self.assertEqual(self.cmds[-1], {"cmd": "queue.remove", "index": 1})
+
     def test_no_thumbs_down_control(self):
         self.assertFalse(hasattr(self.win, "btn_dislike"))
         icon = ROOT / "ui" / "music_player" / "icons" / "hicolor" / "scalable" / "actions" / "music-thumb-down-symbolic.svg"
@@ -255,6 +298,50 @@ class WindowChromeTests(unittest.TestCase):
         self.app.quit_engine = lambda: quits.append(True)
         self.assertTrue(self._key(Gdk.KEY_q, ctrl=True))
         self.assertEqual(quits, [True])
+
+    def test_status_keeps_polling_during_a_slow_command(self):
+        started = threading.Event()
+        release = threading.Event()
+        seen: list[str] = []
+        lock = threading.Lock()
+
+        def request(payload, *, timeout=None, raise_on_error=True):
+            cmd = str(payload.get("cmd") or "")
+            if cmd == "track.play":
+                started.set()
+                release.wait(1.5)
+            with lock:
+                seen.append(cmd)
+            return {"ok": True, "state": "stopped", "position": 0, "duration": 0, "volume": 70}
+
+        self.win.ipc.request = request
+        self.win._bootstrap = lambda: False
+        try:
+            self.win._on_map()
+            deadline = time.time() + 1.0
+            while time.time() < deadline:
+                with lock:
+                    if "status" in seen:
+                        break
+                time.sleep(0.02)
+            else:
+                self.fail("status pump did not start")
+            with lock:
+                seen.clear()
+            self.win._queue_cmd = PlayerWindow._queue_cmd.__get__(self.win, PlayerWindow)
+            self.win._queue_cmd({"cmd": "track.play", "track": {"id": "abc"}}, timeout=5)
+            self.assertTrue(started.wait(1.0), "play did not start")
+            with lock:
+                seen.clear()
+            deadline = time.time() + 1.0
+            while time.time() < deadline:
+                with lock:
+                    if "status" in seen:
+                        return
+                time.sleep(0.02)
+            self.fail("status stalled behind track.play")
+        finally:
+            release.set()
 
 
 class CompactSizeTests(unittest.TestCase):

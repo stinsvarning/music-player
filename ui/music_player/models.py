@@ -270,6 +270,42 @@ def tracks_caption(*, query: str = "", playlist_name: str = "") -> str:
     return name.upper() if name else "TRACKS"
 
 
+def play_from_context(tracks: list[Track], index: int) -> dict[str, Any]:
+    """Play `index` without dropping the surrounding playlist or search rows."""
+    if index < 0 or index >= len(tracks):
+        raise ValueError("track index out of range")
+    chosen = tracks[index]
+    if not chosen.id:
+        raise ValueError("track id is required")
+    rows: list[dict[str, Any]] = []
+    at = 0
+    for i, track in enumerate(tracks):
+        if not track.id:
+            continue
+        if i == index:
+            at = len(rows)
+        rows.append(track.to_ipc())
+    return {"cmd": "track.play", "track": chosen.to_ipc(), "tracks": rows, "index": at}
+
+
+def footer_kind(text: str) -> str:
+    """How a footer string should read: progress stays, errors time out."""
+    low = (text or "").strip().lower()
+    if not low:
+        return "idle"
+    if low == "offline" or "engine exited" in low:
+        return "offline"
+    if "reconnect" in low:
+        return "reconnect"
+    if "session expired" in low or is_library_stale_error(text):
+        return "session"
+    if any(tok in low for tok in ("error", "fail", "died", "cookie", "can't", "could not", "unplayable")):
+        return "error"
+    if low.endswith("…") or low.endswith("..."):
+        return "progress"
+    return "note"
+
+
 def lyric_lines(payload: dict | None) -> list[str]:
     raw = (payload or {}).get("lines") or []
     lines: list[str] = []

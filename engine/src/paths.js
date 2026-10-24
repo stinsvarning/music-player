@@ -19,8 +19,20 @@ export function mpvSocket() {
   return process.env.MUSIC_PLAYER_MPV_SOCK || path.join(configDir(), "mpv.sock");
 }
 
-export function spectrumDir() {
-  return process.env.MUSIC_PLAYER_SPEC || path.join(configDir(), "spectrum");
+export function runtimeDir(env = process.env) {
+  const base = env.XDG_RUNTIME_DIR || os.tmpdir();
+  return path.join(base, "music-player");
+}
+
+export function spectrumDir(env = process.env) {
+  if (env.MUSIC_PLAYER_SPEC) {
+    return env.MUSIC_PLAYER_SPEC;
+  }
+  return path.join(runtimeDir(env), "spectrum");
+}
+
+export function innertubeCacheDir(env = process.env) {
+  return env.MUSIC_PLAYER_INNERTUBE_CACHE || path.join(configDir(), "innertube");
 }
 
 export function configPath() {

@@ -12,7 +12,7 @@ gi.require_version("Gdk", "4.0")
 
 from gi.repository import Gdk, Gio, GLib, GObject, Gtk
 
-from .ipc import EngineError, EngineIPC
+from .ipc import EngineError, EngineIPC, lane_for
 from .layout import bind_ellipsize, caption_bar, clear_list, constrain_scroll, make_row
 from .prefs import load_vis_mode, save_vis_mode
 from .spectrum import cycle_vis
@@ -26,6 +26,7 @@ from .models import (
     Track,
     default_queue_playlist_name,
     format_time,
+    footer_kind,
     is_login_error,
     lyric_lines,
     parse_status,
@@ -46,6 +47,20 @@ from .theme import (
 from .widgets.field import FieldView
 from .widgets.spectrum import SpectrumView
 
+HELP_LINES = (
+    "space      play / pause",
+    "n  p  s    next, previous, stop",
+    "left right seek",
+    "up down    volume",
+    "l          like",
+    "q  m       queue, library",
+    "/          find",
+    "delete     remove the selected queue row",
+    "menu       open the context menu",
+    "f11        fullscreen",
+    "ctrl+q     quit",
+    "?          close this card",
+)
 WINDOW_W = 1180
 WINDOW_H = 880
 DECK_W = 1180
@@ -90,7 +105,7 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         self._rating_syncing = False
         self._rating_track = ""
         self._rating_hold_until = 0.0
-        self._cmd_q: queue.Queue = queue.Queue()
+        self._cmd_lanes = {"transport": queue.Queue(), "query": queue.Queue()}
         self._pump_stop = threading.Event()
         self._login_timer = 0
         self._login_busy = False
@@ -100,6 +115,10 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         self._playlists_token = 0
         self._notice = ""
         self._notice_until = 0.0
+        self._footer_text = ""
+        self._footer_kind = "idle"
+        self._footer_timer = 0
+        self._engine_seen = False
 
         self._install_icons()
         Gtk.StyleContext.add_provider_for_display(
@@ -120,7 +139,9 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         if self._mapped:
             return
         self._mapped = True
-        threading.Thread(target=self._pump, daemon=True).start()
+        threading.Thread(target=self._pump, name="music-status", daemon=True).start()
+        threading.Thread(target=self._command_loop, args=("transport",), name="music-transport", daemon=True).start()
+        threading.Thread(target=self._command_loop, args=("query",), name="music-query", daemon=True).start()
         GLib.idle_add(self._bootstrap)
 
     def stop_pump(self) -> None:
@@ -129,6 +150,9 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         if self._seek_timer:
             GLib.source_remove(self._seek_timer)
             self._seek_timer = 0
+        if self._footer_timer:
+            GLib.source_remove(self._footer_timer)
+            self._footer_timer = 0
 
     def _build(self) -> None:
         self._install_header()
@@ -154,6 +178,7 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         self.field.set_deck(deck)
         stage.add_overlay(deck)
         stage.add_overlay(self._login_overlay())
+        stage.add_overlay(self._help_overlay())
         self.set_child(stage)
 
     def _install_header(self) -> None:
@@ -486,8 +511,22 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
                 self.set_focus(None)
                 return True
             return False
+        if getattr(self, "_help_veil", None) is not None and self._help_veil.get_visible():
+            if keyval in (Gdk.KEY_Escape, Gdk.KEY_question):
+                self._help_veil.set_visible(False)
+            return True
+        if keyval == Gdk.KEY_question:
+            self._toggle_help()
+            return True
         if keyval == Gdk.KEY_Escape:
             self.set_focus(None)
+            return True
+        if keyval in (Gdk.KEY_Delete, Gdk.KEY_KP_Delete):
+            return self._delete_selected_queue_row()
+        if keyval == Gdk.KEY_Menu or (
+            keyval == Gdk.KEY_F10 and mods & Gdk.ModifierType.SHIFT_MASK
+        ):
+            self._open_context_menu()
             return True
         if keyval == Gdk.KEY_space:
             self._cmd("toggle")
@@ -668,33 +707,10 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         clear_list(widget)
 
     def _pump(self) -> None:
+        """Status and the meter only. Slow commands run on their own lanes."""
         last = 0.0
         last_bands = 0.0
         while not self._pump_stop.is_set():
-            try:
-                payload, timeout = self._cmd_q.get(timeout=0.05)
-            except queue.Empty:
-                payload = None
-            if payload is not None:
-                try:
-                    resp = self.ipc.request(payload, timeout=timeout, raise_on_error=False)
-                    if payload.get("cmd") in {"track.like", "track.unlike"}:
-                        GLib.idle_add(self._on_like_result, payload, resp)
-                    elif not resp.get("ok", True):
-                        GLib.idle_add(self._set_footer, resp.get("error") or "engine error")
-                    elif payload.get("cmd") == "playlist.add":
-                        GLib.idle_add(self._set_footer, "saved to playlist")
-                    elif payload.get("cmd") in {
-                        "track.play_next",
-                        "track.queue",
-                        "queue.move",
-                        "queue.remove",
-                        "track.mix",
-                        "playlist.mix",
-                    }:
-                        GLib.idle_add(self._refresh_queue)
-                except (OSError, EngineError) as exc:
-                    GLib.idle_add(self._set_footer, str(exc))
             now = time.monotonic()
             if now - last_bands >= 0.08:
                 try:
@@ -708,11 +724,45 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
                     raw = self.ipc.request({"cmd": "status"}, timeout=2.0, raise_on_error=False)
                     GLib.idle_add(self._on_status, raw)
                 except OSError:
-                    GLib.idle_add(self._set_footer, "engine died")
+                    GLib.idle_add(self._note_link_down, "")
                 last = now
+            self._pump_stop.wait(0.05)
+
+    def _command_loop(self, name: str) -> None:
+        lane = self._cmd_lanes[name]
+        while not self._pump_stop.is_set():
+            try:
+                payload, timeout = lane.get(timeout=0.05)
+            except queue.Empty:
+                continue
+            self._dispatch_cmd(payload, timeout)
+
+    def _dispatch_cmd(self, payload: dict, timeout: float) -> None:
+        try:
+            resp = self.ipc.request(payload, timeout=timeout, raise_on_error=False)
+            if payload.get("cmd") in {"track.like", "track.unlike"}:
+                GLib.idle_add(self._on_like_result, payload, resp)
+            elif not resp.get("ok", True):
+                GLib.idle_add(self._set_footer, resp.get("error") or "engine error")
+            elif payload.get("cmd") == "playlist.add":
+                GLib.idle_add(self._set_footer, "saved to playlist")
+            elif payload.get("cmd") in {
+                "track.play_next",
+                "track.queue",
+                "queue.move",
+                "queue.remove",
+                "track.mix",
+                "playlist.mix",
+            }:
+                GLib.idle_add(self._refresh_queue)
+        except (OSError, EngineError) as exc:
+            GLib.idle_add(self._note_link_down, str(exc))
 
     def _queue_cmd(self, payload: dict, timeout: float = 20.0) -> None:
-        self._cmd_q.put((payload, timeout))
+        name = lane_for(str(payload.get("cmd") or ""))
+        if name == "fast":
+            name = "query"
+        self._cmd_lanes[name].put((payload, timeout))
 
     def _cmd(self, name: str) -> None:
         self._queue_cmd({"cmd": name})
@@ -736,6 +786,9 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
             self._rating_hold_until = 0.0
             self._set_rating(None)
             self._load_lyrics(now)
+        self._engine_seen = True
+        if self._footer_kind in {"offline", "reconnect"} or self._footer_text == "starting…":
+            self._clear_footer()
         if raw.get("liked") is not None and should_apply_engine_rating(
             hold_until=self._rating_hold_until, now=time.monotonic()
         ):
@@ -789,8 +842,7 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
                 self.set_title(st.track.title or "Music")
             else:
                 self.set_title("Music")
-            word = playback_word(st.state)
-            self.status_label.set_text(word)
+            self._paint_footer()
             self.status_dot.remove_css_class("pulse")
             self.status_dot.remove_css_class("pulse-off")
             self.status_dot.add_css_class("pulse" if playing else "pulse-off")
@@ -798,13 +850,15 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
             self._syncing = False
 
     def _refresh_queue(self) -> None:
-        try:
-            raw = self.ipc.request({"cmd": "queue.list"}, timeout=5)
-        except (EngineError, OSError):
-            return
-        tracks = parse_tracks(raw)
-        index = int(raw.get("index") if raw.get("index") is not None else -1)
-        self._render_queue(tracks, index)
+        def done(payload, err) -> bool:
+            if err or not payload or not payload.get("ok", True):
+                return False
+            tracks = parse_tracks(payload)
+            index = int(payload.get("index") if payload.get("index") is not None else -1)
+            self._render_queue(tracks, index)
+            return False
+
+        self._async("", lambda: self.ipc.request({"cmd": "queue.list"}, timeout=5), done)
 
     def _on_seek_change(self, _s, _sc, value: float) -> bool:
         self._seek.drag(float(value))
@@ -1062,7 +1116,7 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
                 box.append(self._menu_button(label, lambda: run(lambda: self._remove_from_queue(row.get_index()))))
         pop.set_child(box)
 
-    def _show_song_menu(self, row: Gtk.ListBoxRow, track: Track, source: str, gesture: Gtk.GestureClick) -> None:
+    def _popup_song_menu(self, row: Gtk.ListBoxRow, track: Track, source: str) -> None:
         self._dismiss_menu()
         pop = Gtk.Popover()
         pop.set_has_arrow(False)
@@ -1071,7 +1125,65 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         pop.set_parent(row)
         pop.popup()
         self._ctx_pop = pop
+
+    def _show_song_menu(self, row: Gtk.ListBoxRow, track: Track, source: str, gesture: Gtk.GestureClick) -> None:
+        self._popup_song_menu(row, track, source)
         gesture.set_state(Gtk.EventSequenceState.CLAIMED)
+
+    def _delete_selected_queue_row(self) -> bool:
+        if self.body_stack.get_visible_child_name() != "queue":
+            return False
+        row = self.queue_list.get_selected_row()
+        if row is None:
+            return False
+        self._remove_from_queue(row.get_index())
+        return True
+
+    def _open_context_menu(self) -> None:
+        if self.body_stack.get_visible_child_name() == "queue":
+            row = self.queue_list.get_selected_row()
+            if row is None:
+                return
+            idx = row.get_index()
+            if 0 <= idx < len(self._queue):
+                self._popup_song_menu(row, self._queue[idx], "queue")
+            return
+        row = self.track_list.get_selected_row()
+        tracks = self.browse.visible()
+        if row is not None and 0 <= row.get_index() < len(tracks):
+            self._popup_song_menu(row, tracks[row.get_index()], "library")
+            return
+        prow = self.playlist_list.get_selected_row()
+        if prow is not None and 0 <= prow.get_index() < len(self._playlists):
+            self._popup_playlist_menu(prow, self._playlists[prow.get_index()])
+
+    def _toggle_help(self) -> None:
+        veil = getattr(self, "_help_veil", None)
+        if veil is None:
+            return
+        veil.set_visible(not veil.get_visible())
+
+    def _help_overlay(self) -> Gtk.Widget:
+        veil = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, hexpand=True, vexpand=True)
+        veil.add_css_class("login-veil")
+        veil.set_visible(False)
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        card.add_css_class("login-card")
+        card.set_halign(Gtk.Align.CENTER)
+        card.set_valign(Gtk.Align.CENTER)
+        title = Gtk.Label(label="Keys", xalign=0)
+        title.add_css_class("title")
+        card.append(title)
+        for line in HELP_LINES:
+            lab = Gtk.Label(label=line, xalign=0)
+            lab.add_css_class("hint")
+            card.append(lab)
+        veil.append(card)
+        click = Gtk.GestureClick()
+        click.connect("pressed", lambda *_a: veil.set_visible(False))
+        veil.add_controller(click)
+        self._help_veil = veil
+        return veil
 
     def _show_save_menu(self, pop: Gtk.Popover, row: Gtk.ListBoxRow, track: Track, source: str) -> None:
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
@@ -1260,16 +1372,78 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         if self._notice:
             self.track_meta.set_text(self._notice)
 
+    def _link_message(self) -> str:
+        app = self.get_application()
+        supervisor = getattr(app, "supervisor", None) if app is not None else None
+        proc = getattr(supervisor, "proc", None)
+        if proc is not None and proc.poll() is not None:
+            detail = ""
+            if hasattr(supervisor, "stderr_text"):
+                detail = supervisor.stderr_text()
+            return detail or "offline"
+        if self._engine_seen:
+            return "reconnecting…"
+        return "starting…"
+
+    def _note_link_down(self, detail: str = "") -> bool:
+        text = (detail or "").strip()
+        if text and footer_kind(text) == "error" and "died" not in text.lower() and "unreachable" not in text.lower():
+            self._set_footer(text)
+            return False
+        message = self._link_message()
+        if message not in {"starting…", "reconnecting…", "offline"}:
+            self._cancel_footer_timer()
+            self._footer_text = message
+            self._footer_kind = "offline"
+            self._paint_footer()
+            return False
+        self._set_footer(message)
+        return False
+
+    def _cancel_footer_timer(self) -> None:
+        if self._footer_timer:
+            GLib.source_remove(self._footer_timer)
+            self._footer_timer = 0
+
+    def _clear_footer(self) -> bool:
+        self._footer_timer = 0
+        self._footer_text = ""
+        self._footer_kind = "idle"
+        self._paint_footer()
+        return False
+
+    def _paint_footer(self) -> None:
+        label = self.status_label
+        for name in ("foot-note", "foot-progress", "foot-error", "foot-offline", "foot-session", "foot-reconnect"):
+            label.remove_css_class(name)
+        if self._footer_text and self._footer_kind != "idle":
+            label.set_text(self._footer_text)
+            label.add_css_class(f"foot-{self._footer_kind}")
+            return
+        label.set_text(playback_word(self.status.state))
+
     def _set_footer(self, text: str) -> None:
-        if text and is_login_error(text):
-            self._show_login(text)
+        message = (text or "").strip()
+        if message and is_login_error(message) and "session expired" not in message.lower():
+            self._show_login(message)
             return
-        low = (text or "").lower()
-        if text and ("can't play" in low or "unplayable" in low):
+        low = message.lower()
+        if message and ("can't play" in low or "unplayable" in low):
             self._show_notice("Can't play here — YouTube-only")
+            message = "Can't play here — YouTube-only"
+        if not message:
+            self._cancel_footer_timer()
+            self._clear_footer()
             return
-        if text and any(token in low for token in ("error", "fail", "died", "cookie")):
-            self.set_title(text)
+        kind = footer_kind(message)
+        self._cancel_footer_timer()
+        self._footer_text = message
+        self._footer_kind = kind
+        self._paint_footer()
+        if kind == "error":
+            self._footer_timer = GLib.timeout_add(6000, self._clear_footer)
+        elif kind == "note":
+            self._footer_timer = GLib.timeout_add(4000, self._clear_footer)
 
     def _show_lyrics(self, lines: list[str], *, found: bool) -> None:
         self._lyric_lines = [str(line) for line in lines or []]

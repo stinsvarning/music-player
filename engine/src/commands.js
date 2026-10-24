@@ -33,7 +33,7 @@ export const COMMANDS = [
     args: [arg("name", "string"), arg("playlist_id", "string")],
     summary: "Save the queue as a new playlist (name) or append to playlist_id",
   },
-  { cmd: "track.play", risk: "write", args: [arg("track", "object", true), arg("replace", "boolean")], summary: "Play a track; replace the queue unless replace is false. Does not start a mix" },
+  { cmd: "track.play", risk: "write", args: [arg("track", "object", true), arg("tracks", "array"), arg("index", "number"), arg("replace", "boolean")], summary: "Play a track. tracks+index keeps that list and starts there; otherwise replace the queue unless replace is false" },
   { cmd: "track.queue", risk: "write", args: [arg("track", "object", true)], summary: "Append a track to the queue" },
   { cmd: "track.play_next", risk: "write", args: [arg("track", "object", true)], summary: "Insert a track after the current item" },
   { cmd: "track.mix", risk: "write", args: [arg("track", "object", true)], summary: "Replace the queue with a radio mix from this track" },

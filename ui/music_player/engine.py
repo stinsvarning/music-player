@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import signal
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -16,6 +17,7 @@ class EngineSupervisor:
         self.ipc = ipc
         self.proc: subprocess.Popen[bytes] | None = None
         self.owned = False
+        self._stderr_tail: list[bytes] = []
 
     def ensure(self, timeout: float = 20.0) -> bool:
         if self.ipc.alive():
@@ -26,24 +28,49 @@ class EngineSupervisor:
         self._clear_stale()
         env = os.environ.copy()
         env["MUSIC_PLAYER_SOCK"] = str(self.socket_path)
+        self._stderr_tail = []
         self.proc = subprocess.Popen(
             ["node", self.binary],
             cwd=str(Path(self.binary).resolve().parent.parent),
             env=env,
             start_new_session=True,
+            stderr=subprocess.PIPE,
         )
         self.owned = True
+        self._read_stderr()
         deadline = time.time() + timeout
-        err = b""
         while time.time() < deadline:
             if self.ipc.alive():
                 return False
             if self.proc.poll() is not None:
-                if self.proc.stderr:
-                    err = self.proc.stderr.read() or b""
-                raise RuntimeError((err.decode(errors="replace") or "engine exited").strip())
+                time.sleep(0.05)
+                detail = self.stderr_text() or "engine exited"
+                raise RuntimeError(detail)
             time.sleep(0.1)
-        raise TimeoutError("engine did not become ready")
+        detail = self.stderr_text()
+        raise TimeoutError(detail or "engine did not become ready")
+
+    def _read_stderr(self) -> None:
+        proc = self.proc
+        if proc is None or getattr(proc, "stderr", None) is None:
+            return
+
+        def drain() -> None:
+            try:
+                while True:
+                    chunk = proc.stderr.readline()
+                    if not chunk:
+                        break
+                    self._stderr_tail.append(chunk)
+                    if len(self._stderr_tail) > 40:
+                        del self._stderr_tail[:-40]
+            except OSError:
+                pass
+
+        threading.Thread(target=drain, daemon=True).start()
+
+    def stderr_text(self) -> str:
+        return b"".join(self._stderr_tail).decode(errors="replace").strip()
 
     def _existing_engine_pid(self) -> int:
         pid_path = Path(str(self.socket_path) + ".pid")

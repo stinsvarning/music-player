@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import signal
+import threading
 from pathlib import Path
 
 import gi
@@ -50,16 +51,21 @@ class MusicApplication(Gtk.Application):
             sock = default_socket()
             ipc = EngineIPC(sock)
             self.supervisor = EngineSupervisor(binary=engine_entry(), socket_path=str(sock), ipc=ipc)
-            try:
-                self.supervisor.ensure()
-            except Exception as exc:  # noqa: BLE001
-                self._fail(str(exc))
-                return
             self.window = PlayerWindow(self, ipc)
             self.window.connect("close-request", self._on_close)
             self.window.present()
+            threading.Thread(target=self._bring_up_engine, daemon=True).start()
         finally:
             self._activating = False
+
+    def _bring_up_engine(self) -> None:
+        supervisor = self.supervisor
+        if supervisor is None:
+            return
+        try:
+            supervisor.ensure()
+        except Exception as exc:  # noqa: BLE001
+            GLib.idle_add(self._fail, str(exc))
 
     def do_shutdown(self) -> None:
         if self.window is not None:

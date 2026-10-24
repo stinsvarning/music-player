@@ -10,8 +10,10 @@ from music_player.models import (
     default_queue_playlist_name,
     format_time,
     is_library_stale_error,
+    footer_kind,
     is_login_error,
     lyric_lines,
+    play_from_context,
     login_status_text,
     LIBRARY_STALE_NOTICE,
     page_done,
@@ -217,6 +219,32 @@ class PageDoneTests(unittest.TestCase):
     def test_done_false_means_more_pages(self):
         self.assertFalse(page_done({"done": False, "playlists": []}))
         self.assertTrue(page_done({"done": True}))
+
+
+class PlayContextTests(unittest.TestCase):
+    def test_keeps_the_visible_rows_and_starts_at_the_chosen_one(self):
+        tracks = [
+            Track(id="a", title="A"),
+            Track(id="b", title="B"),
+            Track(id="c", title="C"),
+        ]
+        payload = play_from_context(tracks, 1)
+        self.assertEqual(payload["cmd"], "track.play")
+        self.assertEqual(payload["index"], 1)
+        self.assertEqual([row["id"] for row in payload["tracks"]], ["a", "b", "c"])
+        self.assertEqual(payload["track"]["id"], "b")
+
+
+class FooterKindTests(unittest.TestCase):
+    def test_progress_errors_and_link_states(self):
+        self.assertEqual(footer_kind("searching weezer…"), "progress")
+        self.assertEqual(footer_kind("saving queue → Liked…"), "progress")
+        self.assertEqual(footer_kind("saved 4 tracks → Liked"), "note")
+        self.assertEqual(footer_kind("could not save"), "error")
+        self.assertEqual(footer_kind("offline"), "offline")
+        self.assertEqual(footer_kind("reconnecting…"), "reconnect")
+        self.assertEqual(footer_kind("session expired — refreshing…"), "session")
+        self.assertEqual(footer_kind(""), "idle")
 
 
 class LyricLineTests(unittest.TestCase):

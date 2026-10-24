@@ -39,6 +39,7 @@ import {
   uniqueAfter,
 } from "./mix.js";
 import { parseLyrics } from "./lyrics.js";
+import { innertubeCacheDir } from "./paths.js";
 import { playlistEditId, textOf } from "./text.js";
 
 const http1 = new Agent({ allowH2: false });
@@ -69,6 +70,7 @@ export class Youtube {
     this._likeCache = new Map();
     this._likedIds = null;
     this._likedLoad = null;
+    this._infoMemo = new Map();
     this.onAuthExpired = null;
   }
 
@@ -96,6 +98,7 @@ export class Youtube {
     this._likeCache = new Map();
     this._likedIds = null;
     this._likedLoad = null;
+    this._infoMemo = new Map();
   }
 
   #requireLogin() {
@@ -116,8 +119,9 @@ export class Youtube {
     this._searchSession = null;
     this._likedIds = null;
     this._likedLoad = null;
+    this._infoMemo = new Map();
     this.yt = await Innertube.create({
-      cache: new UniversalCache(false),
+      cache: new UniversalCache(true, innertubeCacheDir()),
       cookie: cookieHeader,
       generate_session_locally: true,
       fetch: ytFetch,
@@ -337,7 +341,7 @@ export class Youtube {
     }
     let fromInfo = { liked: null, disliked: null };
     try {
-      fromInfo = likeStatusFromInfo(await this.yt.music.getInfo(id));
+      fromInfo = likeStatusFromInfo(await this.#trackInfo(id));
     } catch {
       /* library membership is enough */
     }
@@ -452,6 +456,24 @@ export class Youtube {
     });
   }
 
+  async #trackInfo(videoId, { fresh = false } = {}) {
+    const id = String(videoId || "").trim();
+    const now = Date.now();
+    if (!fresh) {
+      const hit = this._infoMemo.get(id);
+      if (hit && hit.until > now) {
+        return hit.info;
+      }
+    }
+    const info = await this.yt.music.getInfo(id);
+    this._infoMemo.set(id, { info, until: now + 20_000 });
+    while (this._infoMemo.size > 24) {
+      const oldest = this._infoMemo.keys().next().value;
+      this._infoMemo.delete(oldest);
+    }
+    return info;
+  }
+
   async streamUrl(videoId) {
     this.#requireLogin();
     const id = String(videoId || "").trim();
@@ -468,7 +490,7 @@ export class Youtube {
       }
       let info;
       try {
-        info = await this.yt.music.getInfo(id);
+        info = await this.#trackInfo(id, { fresh: attempt > 0 });
       } catch (err) {
         if (isUnplayableError(err)) {
           throw err;

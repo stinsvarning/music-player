@@ -73,13 +73,17 @@ def palette_named(name: str) -> Palette:
 
 
 def load_active_palette() -> Palette:
+    from .prefs import load_color_overrides
+
+    palette = FALLBACK
     for path in omarchy_colors_paths():
         if path.is_file():
             try:
-                return load_omarchy_palette(path)
+                palette = load_omarchy_palette(path)
+                break
             except OSError:
                 continue
-    return FALLBACK
+    return apply_color_overrides(palette, load_color_overrides())
 
 
 def _toml_colors(text: str) -> dict[str, str]:
@@ -191,12 +195,90 @@ def with_accent(palette: Palette, accent: str) -> Palette:
     )
 
 
+_STRUCTURAL = {
+    "mode",
+    "background",
+    "bg",
+    "foreground",
+    "fg",
+    "muted",
+    "cursor",
+    "selection",
+    "selection_background",
+    "selection_foreground",
+    "dark_bg",
+    "dark_background",
+    "darker_bg",
+    "darker_background",
+    "lighter_bg",
+    "lighter_background",
+    "dark_fg",
+    "dark_foreground",
+    "light_fg",
+    "light_foreground",
+    "bright_fg",
+    "bright_foreground",
+}
+
+
+def _color_key(name: str) -> str:
+    return (name or "").strip().lower().replace(" ", "_")
+
+
+def contrast_ratio(left: str, right: str) -> float:
+    light = max(luminance(left), luminance(right))
+    dark = min(luminance(left), luminance(right))
+    return (light + 0.05) / (dark + 0.05)
+
+
+def _chroma(colors: dict[str, str], bg: str) -> list[tuple[str, float, float, float]]:
+    """Saturated swatches that still read on this background: hex, sat, lum, contrast."""
+    found: dict[str, tuple[str, float, float, float]] = {}
+    for key, value in colors.items():
+        if _color_key(key) in _STRUCTURAL:
+            continue
+        sat = saturation(value)
+        lum = luminance(value)
+        if sat < 0.12 or lum < 0.25:
+            continue
+        contrast = contrast_ratio(value, bg)
+        if contrast < 3.0:
+            continue
+        hex_key = value.lower()
+        row = (hex_key, sat, lum, contrast)
+        prev = found.get(hex_key)
+        if prev is None or sat > prev[1]:
+            found[hex_key] = row
+    return list(found.values())
+
+
+def pick_accent_peak(colors: dict[str, str], bg: str) -> tuple[str, str]:
+    """Peak is the lightest chromatic swatch; accent is the next that still reads.
+
+    Named `accent` on spacex-terrafab is a dull slate while cyan and ice sit
+    unused. Rank by luminance so those lights become the meter peak and the
+    accent. A theme that only ships slate and mauve keeps slate as the accent.
+    """
+    rows = _chroma(colors, bg)
+    fallback_accent = colors.get("accent") or colors.get("blue") or colors.get("green") or FALLBACK.accent
+    fallback_peak = colors.get("orange") or colors.get("yellow") or fallback_accent
+    if not rows:
+        return fallback_accent, fallback_peak
+    peak = max(rows, key=lambda row: (row[2], row[3], row[1]))[0]
+    rest = [row for row in rows if row[0] != peak and row[2] <= 0.86]
+    if not rest:
+        rest = [row for row in rows if row[0] != peak]
+    if not rest:
+        return peak, peak
+    accent = max(rest, key=lambda row: (row[2], row[3], row[1]))[0]
+    return accent, peak
+
+
 def palette_from_colors(colors: dict[str, str]) -> Palette:
     bg = colors.get("background") or colors.get("bg") or FALLBACK.bg
     fg = colors.get("foreground") or colors.get("fg") or FALLBACK.fg
     muted = colors.get("muted") or colors.get("dark_fg") or FALLBACK.muted
-    accent = colors.get("accent") or colors.get("blue") or colors.get("green") or FALLBACK.accent
-    peak = colors.get("orange") or colors.get("yellow") or accent
+    accent, peak = pick_accent_peak(colors, bg)
     panel = colors.get("lighter_bg") or mix_hex(bg, fg, 0.08)
     selection = colors.get("selection_background") or colors.get("selection")
     if selection and luminance(selection) < 0.45:
@@ -212,6 +294,24 @@ def palette_from_colors(colors: dict[str, str]) -> Palette:
         accent=accent,
         peak=peak,
         highlight=highlight,
+    )
+
+
+def apply_color_overrides(palette: Palette, overrides: dict[str, str] | None) -> Palette:
+    chosen = overrides or {}
+    accent = chosen.get("accent") or palette.accent
+    peak = chosen.get("peak") or palette.peak
+    if accent == palette.accent and peak == palette.peak:
+        return palette
+    return Palette(
+        name=palette.name,
+        bg=palette.bg,
+        panel=palette.panel,
+        fg=palette.fg,
+        muted=palette.muted,
+        accent=accent,
+        peak=peak,
+        highlight=mix_hex(palette.bg, accent, 0.34),
     )
 
 
@@ -403,6 +503,12 @@ def css_for(palette: Palette) -> str:
         }}
         .meta, .hint {{
             color: {palette.muted};
+        }}
+        .foot-note, .foot-progress, .foot-reconnect {{
+            color: {palette.muted};
+        }}
+        .foot-error, .foot-offline, .foot-session {{
+            color: {palette.peak};
         }}
         .lyric-line {{
             color: {palette.fg};
