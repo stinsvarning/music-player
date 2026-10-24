@@ -191,33 +191,6 @@ def with_accent(palette: Palette, accent: str) -> Palette:
     )
 
 
-def accent_from_pixbuf(pix) -> str | None:
-    if pix is None:
-        return None
-    width = pix.get_width()
-    height = pix.get_height()
-    channels = pix.get_n_channels()
-    stride = pix.get_rowstride()
-    data = pix.get_pixels()
-    best_hex = None
-    best_score = 0.0
-    step = max(1, min(width, height) // 12)
-    for y in range(0, height, step):
-        for x in range(0, width, step):
-            i = y * stride + x * channels
-            r, g, b = data[i], data[i + 1], data[i + 2]
-            if max(r, g, b) < 28 or min(r, g, b) > 232:
-                continue
-            _h, sat, val = _rgb_to_hsv(r, g, b)
-            score = sat * sat * val
-            if score > best_score:
-                best_score = score
-                best_hex = "#{:02x}{:02x}{:02x}".format(r, g, b)
-    if best_hex is None or best_score < 0.04:
-        return None
-    return best_hex
-
-
 def palette_from_colors(colors: dict[str, str]) -> Palette:
     bg = colors.get("background") or colors.get("bg") or FALLBACK.bg
     fg = colors.get("foreground") or colors.get("fg") or FALLBACK.fg

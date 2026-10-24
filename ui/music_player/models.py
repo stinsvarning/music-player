@@ -270,36 +270,20 @@ def tracks_caption(*, query: str = "", playlist_name: str = "") -> str:
     return name.upper() if name else "TRACKS"
 
 
-def current_lyric_index(lines: list[dict] | None, position: float, duration: float) -> int:
-    rows = list(lines or [])
-    if not rows:
-        return -1
-    pos = float(position or 0.0)
-    timed = any(row.get("start") is not None for row in rows)
-    if timed:
-        idx = 0
-        for i, row in enumerate(rows):
-            start = row.get("start")
-            if start is not None and pos >= float(start):
-                idx = i
-        return idx
-    dur = float(duration or 0.0)
-    if dur <= 0:
-        return 0
-    sung = [i for i, row in enumerate(rows) if str(row.get("text") or "").strip()]
-    if not sung:
-        return -1
-    start = min(12.0, dur * 0.15)
-    end = max(start, dur - min(10.0, dur * 0.12))
-    if pos < start:
-        return -1
-    if pos >= end:
-        return sung[-1]
-    span = end - start
-    if span <= 0:
-        return sung[0]
-    slot = min(len(sung) - 1, max(0, int((pos - start) / span * len(sung))))
-    return sung[slot]
+def lyric_lines(payload: dict | None) -> list[str]:
+    raw = (payload or {}).get("lines") or []
+    lines: list[str] = []
+    for row in raw:
+        if isinstance(row, dict):
+            lines.append(str(row.get("text") or ""))
+        elif isinstance(row, str):
+            lines.append(row)
+    if lines:
+        return lines
+    text = (payload or {}).get("text")
+    if text:
+        return str(text).split("\n")
+    return []
 
 
 def login_status_text(payload: dict | None) -> str:
@@ -402,9 +386,3 @@ def parse_playlists(payload: dict[str, Any] | list) -> list[PlaylistInfo]:
             )
         )
     return out
-
-
-def art_url_for(track: Track | None) -> str:
-    if not track or not track.id:
-        return ""
-    return f"https://i.ytimg.com/vi/{track.id}/hqdefault.jpg"

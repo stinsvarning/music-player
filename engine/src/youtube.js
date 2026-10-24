@@ -38,7 +38,7 @@ import {
   startTrackCollection,
   uniqueAfter,
 } from "./mix.js";
-import { parseLyrics, parseVtt } from "./lyrics.js";
+import { parseLyrics } from "./lyrics.js";
 import { playlistEditId, textOf } from "./text.js";
 
 const http1 = new Agent({ allowH2: false });
@@ -434,46 +434,10 @@ export class Youtube {
     if (!id) {
       throw new Error("track id is required");
     }
-    let page = { text: "", footer: "", found: false, lines: [] };
     try {
-      page = parseLyrics(await this.yt.music.getLyrics(id));
+      return parseLyrics(await this.yt.music.getLyrics(id));
     } catch {
-      page = { text: "", footer: "", found: false, lines: [] };
-    }
-    const timed = await this.#captionLines(id);
-    if (timed.length) {
-      return {
-        text: timed.map((row) => row.text).join("\n"),
-        footer: page.footer,
-        found: true,
-        lines: timed,
-      };
-    }
-    return page;
-  }
-
-  async #captionLines(videoId) {
-    if (typeof this.yt?.music?.getInfo !== "function") {
-      return [];
-    }
-    try {
-      const info = await this.yt.music.getInfo(videoId);
-      const tracks = info?.captions?.caption_tracks || [];
-      const track =
-        tracks.find((row) => row && !row.kind && row.base_url) ||
-        tracks.find((row) => row?.base_url);
-      if (!track?.base_url) {
-        return [];
-      }
-      const url = new URL(track.base_url, "https://www.youtube.com");
-      url.searchParams.set("fmt", "vtt");
-      const resp = await ytFetch(url, { headers: { cookie: this._cookie || "" } });
-      if (!resp.ok) {
-        return [];
-      }
-      return parseVtt(await resp.text());
-    } catch {
-      return [];
+      return { text: "", footer: "", found: false, lines: [] };
     }
   }
 
