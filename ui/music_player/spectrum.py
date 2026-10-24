@@ -29,10 +29,10 @@ PEAK_HOLD = 0.38
 PEAK_GRAVITY = 1.7
 
 # Wave: a mirrored dot line with a short dim trail.
-WAVE_ROWS = 20
+WAVE_ROWS = 16
 WAVE_ATTACK = 0.05
 WAVE_RELEASE = 0.24
-WAVE_TRAIL = 3
+WAVE_TRAIL = 2
 
 # Waterfall: one LCD column per band update, newest on the right.
 WATERFALL_ROWS = BAND_COUNT
@@ -49,15 +49,22 @@ FIELD_KEEP = 200
 
 QUIET_GATE = 0.06
 
-# The engine maps -70..0 dB to 0..1, so real music sits around 0.4-0.8 with
-# little swing. A slow per-band floor (falls fast, rises slowly) is subtracted
-# so kicks and notes read against the bed; a quiet passage stays low because
-# the floor never fully cancels it.
-CONTRAST_RISE = 2.5
-CONTRAST_FALL = 1.4
-CONTRAST_MAX = 0.65
-CONTRAST_KEEP = 0.92
-CONTRAST_GAIN = 1.25
+# The engine reports per-band RMS over 80 ms, mapped from -70..0 dB to 0..1.
+# Measured on real (loud, compressed) music the bands sit at 0.45-0.8 and move
+# only about +-0.03 (sd) per band, so a fixed floor either shows a flat wall or
+# nothing. Dynamics normalises each band against its own running mean and
+# spread, keeps a little of the spectral tilt, and scales everything by overall
+# loudness so a quiet track stays quiet.
+DYN_MEAN_TAU = 2.0
+DYN_DEV_TAU = 2.0
+DYN_DEV_FLOOR = 0.012
+DYN_BASE = 0.38
+DYN_SHAPE = 0.7
+DYN_SWING = 0.16
+DYN_EVENT_FROM = 0.7  # z above which a band "hits" (waterfall)
+DYN_EVENT_SPAN = 2.3
+DYN_LOUD_FROM = 0.22  # mean raw band level that counts as silence
+DYN_LOUD_SPAN = 0.36  # ... and how much more is full loudness
 
 
 # ---------------------------------------------------------------- modes
@@ -260,7 +267,7 @@ def wave_row(level: float, half_rows: int) -> int:
 
 def waterfall_step(level: float, steps: int = WATERFALL_STEPS) -> int:
     """Brightness step for one spectrogram cell; 0 means unlit."""
-    v = gate(level, 0.18, 1.3)
+    v = gate(level, 0.10, 1.1)
     return max(0, min(steps, int(math.ceil(v * steps - 0.15))))
 
 
@@ -357,7 +364,7 @@ def field_spec(
         if age >= n:
             return 0.0
         frame = history[n - 1 - age]
-        level = gate(band_at_height(cy, height, frame), 0.15, 1.2)
+        level = gate(band_at_height(cy, height, frame), 0.10, 1.1)
         if level <= 0:
             return 0.0
         fade = max(0.0, 1.0 - ring / max(1.0, half))
@@ -366,7 +373,7 @@ def field_spec(
     if level <= 0:
         return 0.0
     up = (height - cy) / cell
-    tall = level * (height / cell) * 0.85
+    tall = level * (height / cell) * 0.62
     if 0 <= up < tall:
         return level * (1 - up / tall) ** 0.85
     return 0.0
@@ -382,23 +389,49 @@ def field_clearance(dx: float, dy: float, reach: float = CLEAR_REACH) -> float:
 # ---------------------------------------------------------------- state
 
 
-def contrast_bands(bands: list[float], floor: list[float]) -> list[float]:
-    """Subtract most of a per-band running floor and rescale back to 0..1."""
-    out: list[float] = []
-    for v, f in zip(bands, floor):
-        f = min(CONTRAST_MAX, max(0.0, float(f))) * CONTRAST_KEEP
-        out.append(clamp01((float(v) - f) / (1.0 - f) * CONTRAST_GAIN))
-    return out
+def band_z(value: float, mean: float, dev: float) -> float:
+    """How unusual this band is right now, in units of its own recent spread."""
+    z = (float(value) - float(mean)) / max(DYN_DEV_FLOOR, float(dev) * 1.25)
+    return max(-2.5, min(3.5, z))
 
 
-class Contrast:
+def loudness(bands: list[float]) -> float:
+    if not bands:
+        return 0.0
+    return clamp01((sum(bands) / len(bands) - DYN_LOUD_FROM) / DYN_LOUD_SPAN)
+
+
+class Dynamics:
+    """Raw engine bands -> (level, events), both 0..1 per band.
+
+    level: a calm spectrum for bars and lines (base + a little tilt + swing).
+    events: only the moments a band rises clearly above its recent norm.
+    """
+
     def __init__(self) -> None:
-        self.floor = [0.0] * BAND_COUNT
+        self.mean: list[float] | None = None
+        self.dev = [0.03] * BAND_COUNT
+        self.loud = 0.0
 
-    def apply(self, bands: list[float] | None, dt: float = BAND_INTERVAL) -> list[float]:
+    def apply(self, bands: list[float] | None, dt: float = BAND_INTERVAL) -> tuple[list[float], list[float]]:
         vals = clean_bands(bands)
-        self.floor = ease_levels(self.floor, vals, dt, CONTRAST_RISE, CONTRAST_FALL)
-        return contrast_bands(vals, self.floor)
+        if not any(vals):
+            self.loud = ease_levels([self.loud], [0.0], dt, 0.15, 0.35)[0]
+            return [0.0] * BAND_COUNT, [0.0] * BAND_COUNT
+        if self.mean is None or not any(self.mean):
+            self.mean = list(vals)
+        self.mean = ease_levels(self.mean, vals, dt, DYN_MEAN_TAU, DYN_MEAN_TAU)
+        spread = [abs(v - m) for v, m in zip(vals, self.mean)]
+        self.dev = ease_levels(self.dev, spread, dt, DYN_DEV_TAU, DYN_DEV_TAU)
+        self.loud = ease_levels([self.loud], [loudness(vals)], dt, 0.15, 0.5)[0]
+        tilt = sum(self.mean) / BAND_COUNT
+        level: list[float] = []
+        events: list[float] = []
+        for v, m, d in zip(vals, self.mean, self.dev):
+            z = band_z(v, m, d)
+            level.append(self.loud * clamp01(DYN_BASE + (m - tilt) * DYN_SHAPE + DYN_SWING * z))
+            events.append(self.loud * clamp01((z - DYN_EVENT_FROM) / DYN_EVENT_SPAN))
+        return level, events
 
 
 class LcdState:
@@ -416,12 +449,12 @@ class LcdState:
         self.history: deque = deque(maxlen=WATERFALL_KEEP)
         self._wf = [0.0] * BAND_COUNT
         self.serial = 0  # bumps on every band update
-        self._contrast = Contrast()
+        self._dyn = Dynamics()
 
     def set_bands(self, bands: list[float] | None, dt: float = BAND_INTERVAL) -> None:
-        self.target = self._contrast.apply(bands, dt)
+        self.target, events = self._dyn.apply(bands, dt)
         self.trail.appendleft(list(self.wave))
-        self._wf = ease_levels(self._wf, self.target, dt, 0.02, 0.10)
+        self._wf = ease_levels(self._wf, events, dt, 0.02, 0.12)
         self.history.append(list(self._wf))
         self.serial += 1
 
@@ -446,17 +479,19 @@ class FieldState:
         self.amp = 0.0
         self.history: deque = deque(maxlen=FIELD_KEEP)
         self._tick = 0
-        self._contrast = Contrast()
+        self._dyn = Dynamics()
+        self._events = [0.0] * BAND_COUNT
 
     def set_bands(self, bands: list[float] | None, dt: float = BAND_INTERVAL) -> None:
-        vals = self._contrast.apply(bands, dt)
+        vals, events = self._dyn.apply(bands, dt)
+        self._events = ease_levels(self._events, events, dt, FIELD_ATTACK, FIELD_RELEASE)
         self.level = ease_levels(self.level, vals, dt, FIELD_ATTACK, FIELD_RELEASE)
         self.slow = ease_levels(self.slow, vals, dt, FIELD_SLOW_ATTACK, FIELD_SLOW_RELEASE)
         mean = sum(vals) / float(BAND_COUNT)
         self.amp = self.amp * 0.9 + mean * 0.1
         self._tick += 1
         if self._tick % FIELD_DRIFT_EVERY == 0 or not self.history:
-            self.history.append(list(self.level))
+            self.history.append(list(self._events))
 
     def bands_for(self, mode: str) -> list[float]:
         return self.slow if mode == "wave" else self.level

@@ -48,7 +48,7 @@ def _lcg(n: int) -> tuple[float, ...]:
 
 
 JITTER = _lcg(4096)
-TRAIL_ALPHA = (0.22, 0.11, 0.05)
+TRAIL_ALPHA = (0.16, 0.07)
 UNLIT_ALPHA = 0.08
 GRID_ALPHA = 0.045
 
@@ -227,7 +227,7 @@ def _paint_wave(cr, width, height, palette: Palette, state: LcdState) -> None:
         g.fill()
 
     _cached_grid(cr, ("wave", bg, accent), width, height, grid)
-    tones = tone_ramp(palette, half - 1, start=0.42, knee=0.72)
+    tones = tone_ramp(palette, half - 1, start=0.58, knee=0.7)
     buckets: dict = {}
 
     def put(color, c: int, k: int) -> None:

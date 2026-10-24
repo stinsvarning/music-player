@@ -74,6 +74,30 @@ def surf_to_png(surf: cairo.ImageSurface, path: Path) -> None:
     surf.write_to_png(str(path))
 
 
+REPLAY: list[list[float]] = []
+
+
+def load_replay(path: str) -> list[list[float]]:
+    """A band log (one JSON object per line with a "bands" list, polled every 80 ms)."""
+    import json
+
+    rows = []
+    for line in Path(path).read_text().splitlines():
+        try:
+            bands = json.loads(line).get("bands")
+        except ValueError:
+            continue
+        if bands and any(bands):
+            rows.append([float(x) for x in bands])
+    return rows
+
+
+def next_bands(t: float, rng: random.Random) -> list[float]:
+    if REPLAY:
+        return REPLAY[int(round(t / BAND_INTERVAL)) % len(REPLAY)]
+    return synth_bands(t, rng)
+
+
 def render_mode(mode: str, out: Path, palette) -> tuple[Path, Path]:
     rng = random.Random(7)
     lcd = LcdState()
@@ -87,7 +111,7 @@ def render_mode(mode: str, out: Path, palette) -> tuple[Path, Path]:
     dt = 1.0 / FPS
     next_poll = 0.0
     while next_poll < PREROLL:
-        bands = synth_bands(next_poll, rng)
+        bands = next_bands(next_poll, rng)
         lcd.set_bands(bands)
         field.set_bands(bands)
         for _ in range(round(BAND_INTERVAL * FPS)):
@@ -97,7 +121,7 @@ def render_mode(mode: str, out: Path, palette) -> tuple[Path, Path]:
     for i in range(frames):
         t = PREROLL + i * dt
         while t >= next_poll:
-            bands = synth_bands(next_poll, rng)
+            bands = next_bands(next_poll, rng)
             lcd.set_bands(bands)
             field.set_bands(bands)
             next_poll += BAND_INTERVAL
@@ -146,7 +170,11 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="/tmp/vis-lab")
     ap.add_argument("--modes", default=",".join(VIS_MODES))
+    ap.add_argument("--bands", help="replay a real band log (jsonl) instead of synthetic data")
     args = ap.parse_args()
+    if args.bands:
+        REPLAY.extend(load_replay(args.bands))
+        print(f"replaying {len(REPLAY)} polls from {args.bands}")
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     palette = load_active_palette()

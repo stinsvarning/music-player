@@ -9,13 +9,14 @@ from music_player.spectrum import (
     BRICK_SEGS,
     VIS_MODES,
     WATERFALL_STEPS,
-    Contrast,
+    Dynamics,
     FieldState,
     LcdState,
     band_at_height,
     bar_index_at,
     brick_columns,
-    contrast_bands,
+    band_z,
+    loudness,
     cycle_vis,
     ease_levels,
     fall_peaks,
@@ -228,19 +229,38 @@ class SmoothingTests(unittest.TestCase):
             peaks, holds, vels = fall_peaks(peaks, holds, vels, [0.0], 0.016)
         self.assertEqual(peaks[0], 0.0)
 
-    def test_contrast_lifts_hits_above_the_bed(self):
-        c = Contrast()
-        bed = [0.5] * 10
+    def test_dynamics_shows_hits_against_a_flat_loud_bed(self):
+        import random
+
+        rng = random.Random(3)
+        dyn = Dynamics()
+        for _ in range(200):  # real loud music: ~0.7 with +-0.03 jitter
+            level, events = dyn.apply([0.7 + 0.03 * (rng.random() - 0.5) for _ in range(10)])
+        self.assertTrue(all(0.1 < v < 0.7 for v in level), level)
+        self.assertLess(max(events), 0.3)
+        level, events = dyn.apply([0.82] + [0.7] * 9)  # a kick
+        self.assertGreater(level[0], 0.75)
+        self.assertGreater(events[0], 0.5)
+        self.assertLess(max(events[1:]), 0.2)
+
+    def test_dynamics_keeps_quiet_music_quiet_and_silence_dark(self):
+        import random
+
+        rng = random.Random(4)
+        loud, quiet = Dynamics(), Dynamics()
         for _ in range(200):
-            out = c.apply(bed)
-        self.assertLess(max(out), 0.15)
-        hit = c.apply([0.85] + [0.5] * 9)
-        self.assertGreater(hit[0], 0.5)
-        self.assertEqual(contrast_bands([0.1], [0.0]), [0.125])
-        quiet = Contrast()
-        for _ in range(200):
-            q = quiet.apply([0.25] * 10)
-        self.assertLess(max(q), 0.15)
+            jitter = [0.04 * (rng.random() - 0.5) for _ in range(10)]
+            hi, _ = loud.apply([0.7 + j for j in jitter])
+            lo, _ = quiet.apply([0.32 + j for j in jitter])
+        self.assertLess(max(lo), max(hi) * 0.5)
+        for _ in range(20):
+            level, events = loud.apply([0.0] * 10)
+        self.assertEqual(max(level), 0.0)
+        self.assertEqual(max(events), 0.0)
+        self.assertEqual(loudness([0.1] * 10), 0.0)
+        self.assertEqual(loudness([0.9] * 10), 1.0)
+        self.assertGreater(band_z(0.8, 0.7, 0.03), 2.0)
+        self.assertLessEqual(band_z(5.0, 0.0, 0.0), 3.5)
 
     def test_smooth_interpolation_passes_through_bands(self):
         bands = [0.0, 1.0, 0.0, 0.5, 0.2, 0.2, 0.9, 0.1, 0.0, 0.3]
@@ -268,7 +288,7 @@ class StateTests(unittest.TestCase):
             state.set_bands([0.3, 0.9, 0.5, 0.2, 0.7, 0.4, 0.6, 0.1, 0.8, 0.3])
             state.advance(0.08)
         self.assertGreater(max(state.peaks), 0.2)
-        self.assertEqual(len(state.trail), 3)
+        self.assertEqual(len(state.trail), 2)
         state.set_bands([0.0] * 10)
         for _ in range(400):
             active = state.advance(1 / 60)
@@ -321,7 +341,7 @@ class HitTests(unittest.TestCase):
         view.set_palette(FALLBACK)
         self.assertEqual(view.palette.accent, FALLBACK.accent)
         self.assertEqual(view.palette.peak, FALLBACK.peak)
-        view.set_bands([1, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+        view.set_bands([1.0] + [0.7] * 9)
         self.assertEqual(len(view._cols), BRICK_COLS)
         self.assertEqual(len(view.state.history), 1)
         self.assertGreater(view._cols[0], 0)
