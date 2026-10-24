@@ -7,11 +7,11 @@ from music_player.models import (
     SeekGate,
     Track,
     can_autoselect_playlist,
-    current_lyric_index,
     default_queue_playlist_name,
     format_time,
     is_library_stale_error,
     is_login_error,
+    lyric_lines,
     login_status_text,
     LIBRARY_STALE_NOTICE,
     page_done,
@@ -219,24 +219,25 @@ class PageDoneTests(unittest.TestCase):
         self.assertTrue(page_done({"done": True}))
 
 
-class LyricIndexTests(unittest.TestCase):
-    def test_timed_lines_follow_playhead(self):
-        lines = [{"text": "a", "start": 0}, {"text": "b", "start": 10}, {"text": "c", "start": 20}]
-        self.assertEqual(current_lyric_index(lines, 0, 30), 0)
-        self.assertEqual(current_lyric_index(lines, 10.2, 30), 1)
-        self.assertEqual(current_lyric_index(lines, 25, 30), 2)
+class LyricLineTests(unittest.TestCase):
+    def test_lines_are_plain_text_and_timing_is_ignored(self):
+        payload = {
+            "found": True,
+            "text": "one\ntwo",
+            "lines": [
+                {"text": "one", "start": 1.5},
+                {"text": "two", "start": 4},
+            ],
+        }
+        self.assertEqual(lyric_lines(payload), ["one", "two"])
 
-    def test_untimed_lines_wait_through_intro(self):
-        lines = [{"text": "a"}, {"text": "b"}, {"text": "c"}, {"text": "d"}]
-        self.assertEqual(current_lyric_index(lines, 2, 180), -1)
+    def test_falls_back_to_the_text_block(self):
+        self.assertEqual(lyric_lines({"text": "a\nb"}), ["a", "b"])
+        self.assertEqual(lyric_lines(None), [])
+        self.assertEqual(lyric_lines({"lines": ["x", {"text": "y"}]}), ["x", "y"])
 
-    def test_untimed_lines_skip_blanks(self):
-        lines = [{"text": "a"}, {"text": ""}, {"text": "b"}, {"text": "c"}]
-        self.assertEqual(current_lyric_index(lines, 90, 180), 2)
-
-    def test_untimed_lines_hold_last_line_in_outro(self):
-        lines = [{"text": "a"}, {"text": "b"}, {"text": "c"}]
-        self.assertEqual(current_lyric_index(lines, 175, 180), 2)
+    def test_blank_rows_stay_so_verse_gaps_remain(self):
+        self.assertEqual(lyric_lines({"lines": [{"text": "verse"}, {"text": ""}, {"text": "chorus"}]}), ["verse", "", "chorus"])
 
 
 class SongMenuTests(unittest.TestCase):

@@ -134,6 +134,36 @@ class WindowChromeTests(unittest.TestCase):
         self.assertIsNone(self.win.get_titlebar())
         self.assertFalse(self.win.get_decorated())
 
+    def test_lcd_does_not_show_or_fetch_cover_art(self):
+        self.assertFalse(hasattr(self.win, "art"))
+        self.assertFalse(hasattr(self.win, "_load_art"))
+        pictures = []
+
+        def walk(widget):
+            if isinstance(widget, Gtk.Picture):
+                pictures.append(widget)
+            child = widget.get_first_child()
+            while child is not None:
+                walk(child)
+                child = child.get_next_sibling()
+
+        walk(self.win.deck)
+        self.assertEqual(pictures, [])
+
+    def test_lyrics_column_is_plain_text(self):
+        self.win._show_lyrics(["first line", "second line"], found=True)
+        self.assertTrue(self.win.lyrics_list.get_visible())
+        self.assertFalse(self.win.lyrics_empty.get_visible())
+        row = self.win.lyrics_list.get_row_at_index(0)
+        label = row.get_child()
+        self.assertEqual(label.get_text(), "first line")
+        self.assertTrue(label.has_css_class("lyric-line"))
+        self.assertFalse(label.has_css_class("lyric-now"))
+        self.assertEqual(self.win.lyrics_list.get_row_at_index(1).get_child().get_text(), "second line")
+        self.win._show_lyrics([], found=False)
+        self.assertFalse(self.win.lyrics_list.get_visible())
+        self.assertEqual(self.win.lyrics_empty.get_text(), "no lyrics")
+
     def test_no_thumbs_down_control(self):
         self.assertFalse(hasattr(self.win, "btn_dislike"))
         icon = ROOT / "ui" / "music_player" / "icons" / "hicolor" / "scalable" / "actions" / "music-thumb-down-symbolic.svg"

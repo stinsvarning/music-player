@@ -4,14 +4,13 @@ import queue
 import threading
 import time
 from pathlib import Path
-from urllib.request import urlopen
 
 import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
 
-from gi.repository import Gdk, GdkPixbuf, Gio, GLib, GObject, Gtk
+from gi.repository import Gdk, Gio, GLib, GObject, Gtk
 
 from .ipc import EngineError, EngineIPC
 from .layout import bind_ellipsize, caption_bar, clear_list, constrain_scroll, make_row
@@ -25,10 +24,10 @@ from .models import (
     PlayerStatus,
     SeekGate,
     Track,
-    art_url_for,
     default_queue_playlist_name,
     format_time,
     is_login_error,
+    lyric_lines,
     parse_status,
     playback_word,
     parse_tracks,
@@ -47,7 +46,6 @@ from .theme import (
 from .widgets.field import FieldView
 from .widgets.spectrum import SpectrumView
 
-ART_SIZE = 72
 WINDOW_W = 1180
 WINDOW_H = 880
 DECK_W = 1180
@@ -78,7 +76,6 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         self._base_palette = load_active_palette()
         self._palette = self._base_palette
         self._css = Gtk.CssProvider()
-        self._art_token = 0
         self._queue: list[Track] = []
         self._playlists: list[PlaylistInfo] = []
         self.browse = BrowseState()
@@ -99,7 +96,7 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         self._login_busy = False
         self._lyrics_id = ""
         self._lyrics_token = 0
-        self._lyric_lines: list[dict] = []
+        self._lyric_lines: list[str] = []
         self._playlists_token = 0
         self._notice = ""
         self._notice_until = 0.0
@@ -216,9 +213,6 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         eyebrow.append(live)
         box.append(eyebrow)
         top = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
-        self.art = Gtk.Picture()
-        self.art.set_size_request(ART_SIZE, ART_SIZE)
-        self.art.set_content_fit(Gtk.ContentFit.COVER)
         text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, hexpand=True, valign=Gtk.Align.CENTER)
         self.track_title = Gtk.Label(label="Nothing playing", xalign=0)
         self.track_title.add_css_class("marquee")
@@ -741,7 +735,6 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
             self._rating_track = now
             self._rating_hold_until = 0.0
             self._set_rating(None)
-            self._load_art(self.status.track)
             self._load_lyrics(now)
         if raw.get("liked") is not None and should_apply_engine_rating(
             hold_until=self._rating_hold_until, now=time.monotonic()
@@ -1278,11 +1271,10 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         if text and any(token in low for token in ("error", "fail", "died", "cookie")):
             self.set_title(text)
 
-    def _show_lyrics(self, lines: list[dict], *, found: bool) -> None:
-        self._lyric_lines = list(lines or [])
+    def _show_lyrics(self, lines: list[str], *, found: bool) -> None:
+        self._lyric_lines = [str(line) for line in lines or []]
         self._clear(self.lyrics_list)
-        for row in self._lyric_lines:
-            text = str(row.get("text") or "")
+        for text in self._lyric_lines:
             lab = Gtk.Label(label=text if text else " ", xalign=0)
             lab.set_wrap(True)
             lab.add_css_class("lyric-line")
@@ -1327,43 +1319,7 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         if not payload or not payload.get("ok"):
             self._show_lyrics([], found=False)
             return False
-        raw_lines = payload.get("lines") or []
-        lines = [{"text": str(row.get("text") or ""), "start": row.get("start")} for row in raw_lines if isinstance(row, dict)]
-        if not lines and payload.get("text"):
-            lines = [{"text": part, "start": None} for part in str(payload.get("text")).split("\n")]
-        self._show_lyrics(lines, found=bool(payload.get("found")))
-        return False
-
-    def _load_art(self, track: Track | None) -> None:
-        self._art_token += 1
-        token = self._art_token
-        url = art_url_for(track)
-        if not url:
-            return
-
-        def work() -> None:
-            pix = None
-            try:
-                with urlopen(url, timeout=8) as resp:
-                    data = resp.read()
-                loader = GdkPixbuf.PixbufLoader()
-                loader.write(data)
-                loader.close()
-                pix = loader.get_pixbuf()
-                if pix is not None:
-                    pix = pix.scale_simple(ART_SIZE, ART_SIZE, GdkPixbuf.InterpType.BILINEAR)
-            except Exception:
-                pix = None
-            GLib.idle_add(self._set_art, token, pix)
-
-        threading.Thread(target=work, daemon=True).start()
-
-    def _set_art(self, token: int, pix) -> bool:
-        if token != self._art_token:
-            return False
-        if pix is None:
-            return False
-        self.art.set_pixbuf(pix)
+        self._show_lyrics(lyric_lines(payload), found=bool(payload.get("found")))
         return False
 
 
