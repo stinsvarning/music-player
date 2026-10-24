@@ -31,6 +31,7 @@ from music_player.spectrum import (
     tick_brick_peaks,
     tick_peaks,
     waterfall_step,
+    wave_heights,
     wave_row,
 )
 from music_player.widgets.vis_paint import paint_field, paint_lcd
@@ -310,7 +311,42 @@ class StateTests(unittest.TestCase):
         self.assertIs(state.bands_for("bricks"), state.level)
 
 
+class LivelierTests(unittest.TestCase):
+    def test_bricks_use_more_range_and_hits_pop(self):
+        state = LcdState()
+        for _ in range(60):
+            state.set_bands([0.7] * 10)
+            state.advance(0.08)
+        calm = max(state.punch)
+        state.set_bands([0.85] + [0.7] * 9)
+        self.assertGreater(state.punch[0], calm + 0.3)
+        state.advance(1 / 60)
+        self.assertGreater(state.level[0], calm + 0.2)  # fast attack: most of it in one frame
+        self.assertGreater(state.peak_holds[0], 0.0)
+
+    def test_wave_heights_move_and_rest_flat(self):
+        flat = wave_heights([0.0] * 10, 100, 7, phase=1.0, energy=0.0)
+        self.assertEqual(max(flat), 0.0)
+        a = wave_heights([0.5] * 10, 100, 7, phase=0.0, energy=0.4)
+        b = wave_heights([0.5] * 10, 100, 7, phase=1.0, energy=0.4)
+        self.assertGreater(max(abs(x - y) for x, y in zip(a, b)), 0.5)  # the ripple travels
+        self.assertTrue(all(0.0 <= h <= 6.0 for h in a + b))
+        self.assertNotEqual(a[0], a[50])
+        self.assertEqual(wave_heights([0.5] * 10, 0, 7), [])
+
+
 class PaintTests(unittest.TestCase):
+    def test_field_is_dark_at_rest(self):
+        field = FieldState()
+        for _ in range(10):
+            field.set_bands([0.0] * 10)
+        for mode in VIS_MODES:
+            surf = cairo.ImageSurface(cairo.FORMAT_RGB24, 640, 360)
+            paint_field(cairo.Context(surf), 640, 360, (200, 100, 440, 260), mode, FALLBACK, field, 3.0)
+            data = bytes(surf.get_data())
+            bright = max(max(data[i], data[i + 1], data[i + 2]) for i in range(0, len(data), 4))
+            self.assertLess(bright, 40, mode)  # bg (#121212) plus the faint grid only
+
     def test_every_mode_paints_offscreen(self):
         lcd = LcdState()
         field = FieldState()

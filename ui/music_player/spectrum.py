@@ -23,16 +23,26 @@ BAND_COUNT = 10
 BAND_INTERVAL = 0.08  # the window polls the engine for bands every 80 ms
 
 # Bricks: fast attack, slower release; caps hold, then fall with gravity.
-BRICK_ATTACK = 0.025
-BRICK_RELEASE = 0.20
-PEAK_HOLD = 0.38
-PEAK_GRAVITY = 1.7
+BRICK_ATTACK = 0.012
+BRICK_RELEASE = 0.15
+BRICK_PIVOT = 0.40  # bricks expand the calm level around this point...
+BRICK_RANGE = 1.6  # ...by this much
+BRICK_KICK = 0.45  # and add this much of each hit on top
+PEAK_HOLD = 0.24
+PEAK_GRAVITY = 2.8
 
 # Wave: a mirrored dot line with a short dim trail.
-WAVE_ROWS = 16
-WAVE_ATTACK = 0.05
-WAVE_RELEASE = 0.24
+WAVE_ROWS = 14
+WAVE_ATTACK = 0.03
+WAVE_RELEASE = 0.17
 WAVE_TRAIL = 2
+WAVE_PIVOT = 0.40  # like bricks: expand the calm level around this point
+WAVE_RANGE = 1.8
+WAVE_KICK = 0.50
+WAVE_TRAVEL = 2.2  # rad/s of the gentle travelling ripple
+WAVE_RIPPLE = 1.5  # ripple height in rows at full energy
+WAVE_CYCLES = 1.6  # ripple cycles across the strip
+WAVE_ENERGY_GAIN = 2.2  # typical music energy (~0.4) gives a full ripple
 
 # Waterfall: one LCD column per band update, newest on the right.
 WATERFALL_ROWS = BAND_COUNT
@@ -265,6 +275,27 @@ def wave_row(level: float, half_rows: int) -> int:
     return max(0, min(half_rows - 1, int(round(v * (half_rows - 1)))))
 
 
+def wave_heights(levels: list[float], cols: int, half_rows: int, phase: float = 0.0, energy: float = 0.0) -> list[float]:
+    """Fractional rows above the centre line for each wave column.
+
+    Bands are eased into a curve, and a gentle ripple scaled by the music's
+    energy travels along it so the line keeps moving on sustained sounds.
+    Silence gives a flat line at 0.
+    """
+    if cols <= 0:
+        return []
+    top = max(0.0, float(half_rows - 1))
+    curve = interpolate_smooth(levels, cols)
+    swell = WAVE_RIPPLE * clamp01(energy * WAVE_ENERGY_GAIN)
+    out: list[float] = []
+    for c, v in enumerate(curve):
+        h = gate(v, 0.03, 0.75) * top
+        if swell > 0:
+            h += swell * math.sin(math.tau * WAVE_CYCLES * c / max(1, cols) - phase) * min(1.0, 0.35 + h / 2)
+        out.append(max(0.0, min(top, h)))
+    return out
+
+
 def waterfall_step(level: float, steps: int = WATERFALL_STEPS) -> int:
     """Brightness step for one spectrogram cell; 0 means unlit."""
     v = gate(level, 0.10, 1.1)
@@ -346,10 +377,10 @@ def field_spec(
         side = clamp01(abs(cx - mid_x) / max(1.0, half))
         reach = clamp01((side - 0.22) / 0.78) ** 0.9
         d = abs(cy - mid_y)
-        line = 0.12 * reach if d < cell * 0.5 else 0.0
         swell = gate(bass_of(bands), 0.04, 1.1)
         if swell <= 0 or reach <= 0:
-            return line
+            return 0.0  # dark at rest
+        line = 0.12 * reach * min(1.0, swell * 4.0) if d < cell * 0.5 else 0.0
         undulate = 0.9 + 0.1 * math.sin(t * 0.5 + side * 2.2)
         thick = cell * 0.5 + swell * reach * height * 0.30 * undulate
         if d >= thick:
@@ -441,9 +472,13 @@ class LcdState:
         self.target = [0.0] * BAND_COUNT
         self.level = [0.0] * BAND_COUNT  # bricks smoothing
         self.wave = [0.0] * BAND_COUNT  # wave smoothing
+        self.punch = [0.0] * BAND_COUNT  # bricks target: wider range plus hits
+        self.wave_target = [0.0] * BAND_COUNT
+        self.phase = 0.0
+        self.energy = 0.0
         self.bars = [0.0] * BRICK_COLS
         self.peaks = [0.0] * BRICK_COLS
-        self._holds = [0.0] * BRICK_COLS
+        self.peak_holds = [0.0] * BRICK_COLS  # >0 while a cap is freshly holding
         self._vels = [0.0] * BRICK_COLS
         self.trail: deque = deque(maxlen=WAVE_TRAIL)
         self.history: deque = deque(maxlen=WATERFALL_KEEP)
@@ -453,7 +488,15 @@ class LcdState:
 
     def set_bands(self, bands: list[float] | None, dt: float = BAND_INTERVAL) -> None:
         self.target, events = self._dyn.apply(bands, dt)
-        self.trail.appendleft(list(self.wave))
+        self.punch = [
+            clamp01(BRICK_PIVOT + (v - BRICK_PIVOT) * BRICK_RANGE + BRICK_KICK * e) if v > 0 else 0.0
+            for v, e in zip(self.target, events)
+        ]
+        self.wave_target = [
+            clamp01(WAVE_PIVOT + (v - WAVE_PIVOT) * WAVE_RANGE + WAVE_KICK * e) if v > 0 else 0.0
+            for v, e in zip(self.target, events)
+        ]
+        self.trail.appendleft((list(self.wave), self.phase, self.energy))
         self._wf = ease_levels(self._wf, events, dt, 0.02, 0.12)
         self.history.append(list(self._wf))
         self.serial += 1
@@ -461,12 +504,18 @@ class LcdState:
     def advance(self, dt: float) -> bool:
         """Step smoothing by dt seconds. True while anything is still visible or moving."""
         dt = max(0.0, min(0.25, float(dt)))
-        self.level = ease_levels(self.level, self.target, dt, BRICK_ATTACK, BRICK_RELEASE)
-        self.wave = ease_levels(self.wave, self.target, dt, WAVE_ATTACK, WAVE_RELEASE)
+        self.level = ease_levels(self.level, self.punch, dt, BRICK_ATTACK, BRICK_RELEASE)
+        self.wave = ease_levels(self.wave, self.wave_target, dt, WAVE_ATTACK, WAVE_RELEASE)
+        mean = sum(self.target) / BAND_COUNT
+        self.energy = ease_levels([self.energy], [mean], dt, 0.08, 0.6)[0]
+        self.phase = (self.phase + WAVE_TRAVEL * dt) % math.tau
         self.bars = interpolate_bars(self.level, BRICK_COLS)
-        self.peaks, self._holds, self._vels = fall_peaks(self.peaks, self._holds, self._vels, self.bars, dt)
-        return any(v > 1e-3 for v in self.peaks) or any(v > 1e-3 for v in self.wave) or any(
-            v > 1e-3 for v in self.target
+        self.peaks, self.peak_holds, self._vels = fall_peaks(self.peaks, self.peak_holds, self._vels, self.bars, dt)
+        return (
+            any(v > 1e-3 for v in self.peaks)
+            or any(v > 1e-3 for v in self.wave)
+            or any(v > 1e-3 for v in self.target)
+            or self.energy > 1e-3
         )
 
 

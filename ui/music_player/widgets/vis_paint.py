@@ -21,7 +21,7 @@ from music_player.spectrum import (
     field_clearance,
     field_spec,
     interpolate_smooth,
-    wave_row,
+    wave_heights,
     waterfall_step,
 )
 from music_player.theme import Palette, mix_hex
@@ -48,9 +48,12 @@ def _lcg(n: int) -> tuple[float, ...]:
 
 
 JITTER = _lcg(4096)
-TRAIL_ALPHA = (0.16, 0.07)
+TRAIL_ALPHA = (0.10, 0.045)
 UNLIT_ALPHA = 0.08
 GRID_ALPHA = 0.045
+FIELD_GRID_ALPHA = 0.025  # the field's unlit cells; 0 for pure black at rest
+FIELD_GAIN = 0.8
+FIELD_LIFT = 0.22  # cells the music touches get the same lift the old idle dither gave
 
 _RGB: dict[str, tuple[float, float, float]] = {}
 _TONES: dict[tuple, list[tuple[float, float, float]]] = {}
@@ -196,8 +199,9 @@ def _paint_bricks(cr, width, height, palette: Palette, state: LcdState, hover: i
         for s in range(lit):
             buckets[color(s, hot)].append((x, height - 2 - (s + 1) * seg + (seg - brick), col_w, brick))
         if cap > lit:
-            s = cap - 1
-            buckets[color(s, hot)].append((x, height - 2 - (s + 1) * seg + (seg - brick), col_w, brick))
+            s = cap - 1  # a fresh cap pops in the peak tone, then falls in the accent tone
+            fresh = i < len(state.peak_holds) and state.peak_holds[i] > 0
+            buckets[(hot_high if hot else high) if fresh else (hot_mid if hot else mid)].append((x, height - 2 - (s + 1) * seg + (seg - brick), col_w, brick))
     _fill_buckets(cr, buckets)
 
 
@@ -229,29 +233,40 @@ def _paint_wave(cr, width, height, palette: Palette, state: LcdState) -> None:
     _cached_grid(cr, ("wave", bg, accent), width, height, grid)
     tones = tone_ramp(palette, half - 1, start=0.58, knee=0.7)
     buckets: dict = {}
+    steps = 6  # alpha steps for the in-between rows
 
-    def put(color, c: int, k: int) -> None:
+    def put(c: int, k: int, alpha: float, tone=None) -> None:
+        if alpha <= 0.5 / steps or k < 0 or k >= half:
+            return
+        a = round(alpha * steps) / steps
+        base = tone if tone is not None else tones[max(1, k)]
+        key = base if a >= 1.0 else (*base, a)
+        rects = buckets.setdefault(key, [])
         x = ox + c * pitch + pad
-        rects = buckets.setdefault(color, [])
         rects.append((x, oy + (half - 1 - k) * pitch + pad, size, size))
         rects.append((x, oy + (half + k) * pitch + pad, size, size))
 
-    now = [wave_row(v, half) for v in interpolate_smooth(state.wave, cols)]
-    for j, snap in enumerate(state.trail):
+    def line(heights: list[float], alpha: float, tone=None) -> None:
+        prev = None
+        for c, h in enumerate(heights):
+            k = int(h)
+            f = h - k
+            # hand the dot over between rows only around the midpoint, so the line
+            # moves continuously without looking doubled
+            w = min(1.0, max(0.0, (f - 0.3) / 0.4))
+            put(c, k, alpha * (1.0 - w), tone)
+            put(c, k + 1, alpha * w, tone)
+            if prev is not None and abs(h - prev) > 1.0:
+                lo, hi = sorted((prev, h))
+                for kk in range(int(lo) + 1, int(hi) + (1 if hi % 1 > 0.5 else 0)):
+                    put(c, kk, alpha * 0.55, tone)
+            prev = h
+
+    for j, (snap, phase, energy) in enumerate(state.trail):
         if j >= len(TRAIL_ALPHA):
             break
-        color = (*accent, TRAIL_ALPHA[j])
-        for c, v in enumerate(interpolate_smooth(snap, cols)):
-            k = wave_row(v, half)
-            if k != now[c]:
-                put(color, c, k)
-    for c, k in enumerate(now):
-        put(tones[max(1, k)], c, k)
-        # join steps so the dots read as one continuous line
-        if c > 0 and abs(now[c - 1] - k) > 1:
-            lo, hi = sorted((now[c - 1], k))
-            for kk in range(lo + 1, hi):
-                put(tones[max(1, kk)], c if now[c - 1] < k else c - 1, kk)
+        line(wave_heights(snap, cols, half, phase, energy), TRAIL_ALPHA[j] / 0.6, accent)
+    line(wave_heights(state.wave, cols, half, state.phase, state.energy), 1.0)
     _fill_buckets(cr, buckets)
 
 
@@ -311,45 +326,69 @@ def paint_field(
     state: FieldState,
     t: float,
 ) -> None:
-    cr.set_source_rgb(*rgb(palette.bg))
-    cr.rectangle(0, 0, width, height)
-    cr.fill()
+    """Dark at rest: a faint cell grid, lit only where the mode's music response drives it."""
     if width < 8 or height < 8:
+        cr.set_source_rgb(*rgb(palette.bg))
+        cr.rectangle(0, 0, width, height)
+        cr.fill()
         return
     deck_l, deck_t, deck_r, deck_b = deck
     cell = max(4.0, width / FIELD_COLS)
     mid_x = (deck_l + deck_r) / 2 if deck_r > deck_l else width / 2
     mid_y = (deck_t + deck_b) / 2 if deck_b > deck_t else height / 2
     half = max(1.0, width / 2)
-    dim = rgb(mix_hex(palette.bg, palette.accent, 0.28))
-    mid = rgb(mix_hex(palette.bg, palette.accent, 0.55))
-    lit = rgb(palette.accent)
-    buckets: dict = {dim: [], mid: [], lit: []}
-    bands = state.bands_for(mode)
-    history = state.history if mode == "waterfall" else None
-    amp = state.amp
     cols = int(math.ceil(width / cell)) + 2
     rows = int(math.ceil(height / cell)) + 2
     side = max(1, round(cell) - 1)
+    bg = rgb(palette.bg)
+    accent = rgb(palette.accent)
+
+    # per-column / per-row distance outside the deck, and the deck clearance
+    col_dx = []
     for col in range(-1, cols):
+        cx = col * cell + cell / 2
+        col_dx.append(max(deck_l - cx, 0.0, cx - deck_r) if deck_r > deck_l else 0.0)
+    row_dy = []
+    for row in range(-1, rows):
+        cy = row * cell + cell / 2
+        row_dy.append(max(deck_t - cy, 0.0, cy - deck_b) if deck_b > deck_t else 0.0)
+
+    def grid(g: cairo.Context) -> None:
+        g.set_source_rgb(*bg)
+        g.paint()
+        if FIELD_GRID_ALPHA <= 0:
+            return
+        for ri, row in enumerate(range(-1, rows)):
+            for ci, col in enumerate(range(-1, cols)):
+                shade = field_clearance(col_dx[ci], row_dy[ri])
+                if shade < 0.05:
+                    continue
+                g.set_source_rgba(*accent, FIELD_GRID_ALPHA * shade)
+                g.rectangle(round(col * cell), round(row * cell), side, side)
+                g.fill()
+
+    _cached_grid(cr, ("field", bg, accent, round(deck_l), round(deck_t), round(deck_r), round(deck_b)), width, height, grid)
+
+    dim = rgb(mix_hex(palette.bg, palette.accent, 0.28))
+    mid = rgb(mix_hex(palette.bg, palette.accent, 0.55))
+    lit = accent
+    buckets: dict = {dim: [], mid: [], lit: []}
+    bands = state.bands_for(mode)
+    history = state.history if mode == "waterfall" else None
+    for ci, col in enumerate(range(-1, cols)):
         x = col * cell
         cx = x + cell / 2
-        dx = max(deck_l - cx, 0.0, cx - deck_r) if deck_r > deck_l else 0.0
-        for row in range(-1, rows):
-            y = row * cell
-            cy = y + cell / 2
-            dy = max(deck_t - cy, 0.0, cy - deck_b) if deck_b > deck_t else 0.0
+        dx = col_dx[ci]
+        for ri, row in enumerate(range(-1, rows)):
+            dy = row_dy[ri]
             shade = field_clearance(dx, dy)
             if shade < 0.004:
                 continue
-            j = JITTER[(row * 37 + col * 11) & 4095]
-            tw = 0.5 + 0.5 * math.sin(t * 1.1 + j * 6.283)
-            base = 0.55 + 0.45 * JITTER[((row & 63) * 64 + (col & 63)) & 4095]
-            energy = shade * (0.30 + 0.52 * base * base + 0.18 * tw + amp * 0.22) * 0.34
+            y = row * cell
             spec = field_spec(
                 mode,
                 cx=cx,
-                cy=cy,
+                cy=y + cell / 2,
                 mid_x=mid_x,
                 mid_y=mid_y,
                 half=half,
@@ -360,12 +399,14 @@ def paint_field(
                 ring=max(dx, dy),
                 history=history,
             )
-            if spec > 0:
-                energy += spec * 0.72 * min(1.0, shade * 3)
+            if spec <= 0:
+                continue
+            energy = (spec * FIELD_GAIN + FIELD_LIFT * min(1.0, spec / 0.08)) * min(1.0, shade * 3)
+            j = JITTER[(row * 37 + col * 11) & 4095]
             threshold = 0.78 * ((BAYER[(row & 7) * 8 + (col & 7)] + 0.5) / 64) + 0.22 * j
             if energy <= threshold:
                 continue
-            heat = spec * 0.55 + amp * 0.12
+            heat = spec * 0.6
             color = lit if heat > 0.34 else mid if heat > 0.1 else dim
             buckets[color].append((round(x), round(y), side, side))
     _fill_buckets(cr, buckets)
