@@ -11,7 +11,7 @@ gi.require_version("Graphene", "1.0")
 
 from gi.repository import Gdk, GLib, Graphene, Gtk
 
-from music_player.spectrum import VIS_MODES, FieldState, normalize_vis
+from music_player.spectrum import VIS_MODES, VIS_OFF, FieldState, normalize_vis
 from music_player.theme import Palette, palette_named
 from music_player.widgets.vis_paint import (
     field_cells,
@@ -58,6 +58,7 @@ class FieldView(Gtk.DrawingArea):
         self._grid: tuple | None = None  # (key, texture)
         self._dark_drawn = False  # the last frame drawn had no lit cells
         self.draws = 0  # snapshots taken; for tests and frame counting
+        self._volume: float | None = None
         self.set_cursor_from_name("pointer")
         click = Gtk.GestureClick()
         click.connect("released", self._on_click)
@@ -72,7 +73,14 @@ class FieldView(Gtk.DrawingArea):
         return self.state.amp
 
     def set_mode(self, mode: str) -> None:
-        self.mode = normalize_vis(mode)
+        mode = normalize_vis(mode)
+        if mode == self.mode:
+            return
+        if self.mode == VIS_OFF:
+            # Back on: start from rest rather than from whatever played before off.
+            self.state = FieldState()
+            self.state.set_volume(self._volume)
+        self.mode = mode
         self._dark_drawn = False
         self.queue_draw()
 
@@ -89,9 +97,12 @@ class FieldView(Gtk.DrawingArea):
         self.queue_draw()
 
     def set_volume(self, volume: float | None) -> None:
+        self._volume = volume
         self.state.set_volume(volume)
 
     def set_bands(self, bands: list[float]) -> None:
+        if self.mode == VIS_OFF:
+            return  # off: the bare grid stays as drawn
         self.state.set_bands(bands)
         # Silence (paused, stopped, a quiet intro) leaves the field dark: once a
         # dark frame is on screen there is nothing to redraw until music returns.

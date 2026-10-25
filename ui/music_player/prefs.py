@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
-from .spectrum import VIS_MODES, normalize_vis
+from .spectrum import VIS_MODES, normalize_vis, vis_name
 
 
 def config_path() -> Path:
@@ -54,40 +55,42 @@ def load_color_overrides(path: Path | None = None) -> dict[str, str]:
     return out
 
 
-def load_vis_mode(path: Path | None = None) -> str:
+def config_vis_mode(path: Path | None = None) -> str | None:
+    """vis_mode as written in config.toml (bricks/wave/waterfall/off), or None if unset."""
     file = path or config_path()
     try:
         text = file.read_text()
     except OSError:
-        return VIS_MODES[0]
+        return None
     for raw in text.splitlines():
         line = raw.split("#", 1)[0].strip()
         if line.lower().startswith("vis_mode"):
             _, _, val = line.partition("=")
             return normalize_vis(val.strip().strip("\"'"))
-    return VIS_MODES[0]
+    return None
 
 
-def save_vis_mode(mode: str, path: Path | None = None) -> None:
-    mode = normalize_vis(mode)
-    file = path or config_path()
+def load_vis_mode(path: Path | None = None) -> str:
+    return config_vis_mode(path) or VIS_MODES[0]
+
+
+def session_path() -> Path:
+    """The engine's state file (queue, volume, EQ, last visualizer look)."""
+    override = os.environ.get("MUSIC_PLAYER_SESSION")
+    if override:
+        return Path(override)
+    return config_path().parent / "session.json"
+
+
+def saved_vis_mode(path: Path | None = None) -> str | None:
+    """The look last picked in the window, as the engine saved it; None if never."""
     try:
-        text = file.read_text()
-    except OSError:
-        text = ""
-    lines = text.splitlines()
-    out: list[str] = []
-    replaced = False
-    for line in lines:
-        bare = line.split("#", 1)[0].strip()
-        if bare.lower().startswith("vis_mode"):
-            out.append(f'vis_mode = "{mode}"')
-            replaced = True
-        else:
-            out.append(line)
-    if not replaced:
-        if out and out[-1] != "":
-            out.append("")
-        out.append(f'vis_mode = "{mode}"')
-    file.parent.mkdir(parents=True, exist_ok=True)
-    file.write_text("\n".join(out) + "\n")
+        data = json.loads((path or session_path()).read_text())
+    except (OSError, ValueError):
+        return None
+    return vis_name(data.get("vis_mode")) if isinstance(data, dict) else None
+
+
+def initial_vis_mode() -> str:
+    """Saved choice, else config.toml's vis_mode, else bricks."""
+    return saved_vis_mode() or load_vis_mode()

@@ -23,7 +23,7 @@ from .layout import DECK_H, DECK_W, bind_ellipsize, constrain_scroll
 from .library import LibraryMixin
 from .login import LoginMixin
 from .models import BrowseState, PlaylistInfo, PlayerStatus, SeekGate, Track
-from .prefs import load_vis_mode
+from .prefs import config_vis_mode, initial_vis_mode, saved_vis_mode
 from .queue_view import QueueViewMixin
 from .theme import load_active_palette
 
@@ -102,7 +102,9 @@ class PlayerWindow(
         self._mapped = False
         self._login_spec = ""
         self._build()
-        self._apply_vis(load_vis_mode())
+        self._config_vis = config_vis_mode()  # live edits of this line apply (see _reload_config)
+        self._engine_vis = saved_vis_mode()
+        self._apply_vis(initial_vis_mode())
         self._apply_palette(self._palette)
         self._watch_theme()
         self._bind_keys()

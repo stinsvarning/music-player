@@ -11,6 +11,7 @@ import math
 import cairo
 
 from music_player.spectrum import (
+    VIS_OFF,
     BRICK_SEGS,
     FIELD_BRICK_TALL,
     FIELD_COLS,
@@ -149,6 +150,15 @@ def _cached_grid(cr: cairo.Context, key: tuple, width: int, height: int, draw) -
 # ------------------------------------------------------------------ LCD
 
 
+_REST: list = []
+
+
+def _rest_lcd() -> LcdState:
+    if not _REST:
+        _REST.append(LcdState())
+    return _REST[0]
+
+
 def paint_lcd(
     cr: cairo.Context,
     width: int,
@@ -160,7 +170,10 @@ def paint_lcd(
 ) -> None:
     if width <= 0 or height <= 0:
         return
-    if mode == "wave":
+    if mode == VIS_OFF:
+        # off: the bricks grid at rest (unlit cells only), whatever the state holds
+        _paint_bricks(cr, width, height, palette, _rest_lcd(), -1)
+    elif mode == "wave":
         _paint_wave(cr, width, height, palette, state)
     elif mode == "waterfall":
         _paint_waterfall(cr, width, height, palette, state)
@@ -436,6 +449,8 @@ def _field_cell_light(spec: float, shade3: float, threshold: float, heat_gain: f
 def field_cells(geom: FieldGeom, height: int, mode: str, state: FieldState, t: float) -> tuple[list, list, list]:
     """Rects of the lit field cells per tone (dim, mid, lit); pure, so it can be compared and cached."""
     out: tuple[list, list, list] = ([], [], [])
+    if mode == VIS_OFF:
+        return out  # off: the bare grid
     tone = (None, out[0], out[1], out[2])
     bands = state.bands_for(mode)
     cell = geom.cell

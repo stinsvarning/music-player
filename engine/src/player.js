@@ -1,6 +1,6 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { UrlCache } from "./cache.js";
-import { PRESETS, VIS_BANDS_HZ, dbToUnit, lavfiEqualizer, parseAmetadataLog, spectrumBandFile } from "./eq.js";
+import { PRESETS, VIS_BANDS_HZ, dbToUnit, lavfiEqualizer, parseAmetadataLog, spectrumBandFile, visModeName } from "./eq.js";
 import fs from "node:fs";
 import { spectrumDir } from "./paths.js";
 import { isUnplayableError, unplayableError } from "./playable.js";
@@ -24,6 +24,8 @@ export class Player {
     this.eqPreset = "Flat";
     this.eqBands = [...PRESETS.Flat];
     this.volumeLevel = 70;
+    this.visSaved = null; // last look the window picked (persisted), or null
+    this.visMode = "bricks"; // the look in effect; "off" drops the spectrum taps
     this.position = 0;
     this._lastPosSave = 0;
     this.state = "stopped";
@@ -63,10 +65,45 @@ export class Player {
     }
   }
 
+  get analysing() {
+    return this.visMode !== "off";
+  }
+
   async applyEq() {
+    if (!this.analysing) {
+      // Visualizer off: no spectrum taps in mpv, only the equalizer.
+      await this.mpv.setAf(lavfiEqualizer(this.eqBands));
+      return;
+    }
     const dir = spectrumDir();
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     await this.mpv.setAf(lavfiEqualizer(this.eqBands, dir));
+  }
+
+  /**
+   * Set the visualizer look. "off" removes the spectrum taps from mpv's filter
+   * chain (mpv swaps the graph in place, without resetting the audio output) and
+   * stops band sampling; any other look puts them back. save=false applies it
+   * without remembering it (the window syncing a look from its config).
+   */
+  async setVis(mode, { save = true } = {}) {
+    const name = visModeName(mode);
+    if (!name) {
+      throw new Error(`unknown visualizer ${mode}`);
+    }
+    const was = this.analysing;
+    this.visMode = name;
+    if (!this.analysing) {
+      this.stopBands();
+      this._bands = Array(VIS_BANDS_HZ.length).fill(0);
+    }
+    if (was !== this.analysing && typeof this.mpv?.setAf === "function") {
+      await this.applyEq();
+    }
+    if (save) {
+      this.visSaved = name;
+      this.#saveSession();
+    }
   }
 
   async applyVolume() {
@@ -86,6 +123,7 @@ export class Player {
       volume: this.volumeLevel,
       eq_preset: this.eqPreset,
       eq_bands: [...this.eqBands],
+      vis_mode: this.visSaved,
       position: this.position,
       sleep_until: this.sleepUntil,
       sleep_minutes: this.sleepMinutes,
@@ -106,6 +144,8 @@ export class Player {
       this.volumeLevel = session.volume;
       this.eqPreset = session.eq_preset;
       this.eqBands = [...session.eq_bands];
+      this.visSaved = session.vis_mode;
+      this.visMode = session.vis_mode || "bricks";
       this.position = session.position;
       this.sleepUntil = session.sleep_until;
       this.sleepMinutes = session.sleep_minutes;
@@ -574,7 +614,7 @@ export class Player {
 
   async bands() {
     this._bandsUntil = Date.now() + 400;
-    if (this.state !== "playing") {
+    if (this.state !== "playing" || !this.analysing) {
       this._bands = Array(VIS_BANDS_HZ.length).fill(0);
       return [...this._bands];
     }
@@ -818,6 +858,8 @@ export class Player {
       sleep_minutes: this.sleepMinutes,
       eq_preset: this.eqPreset,
       eq_bands: [...this.eqBands],
+      vis_mode: this.visSaved,
+      vis_on: this.analysing,
       liked: track?.liked === true ? true : track?.liked === false ? false : null,
       disliked: track?.disliked === true ? true : track?.disliked === false ? false : null,
       queue_sig: `${this.index}:${this.queue.map((t) => t.id).join(",")}`,
