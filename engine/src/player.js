@@ -36,6 +36,12 @@ export class Player {
     this._bandsUntil = 0;
     this._bandsTimer = null;
     this._changeListeners = new Set();
+    // Gapless: the next track's stream sits in mpv's playlist behind the current
+    // one, so mpv rolls over by itself at end of file (with --prefetch-playlist).
+    this._preloaded = null; // { id, url, index } of the entry queued in mpv
+    this._preloadTimer = null;
+    this._preloadChain = Promise.resolve();
+    this._rolled = null; // id we rolled over to, until mpv confirms it loaded
     if (typeof this.mpv?.onEvent === "function") {
       this.mpv.onEvent((ev) => this.#onMpvEvent(ev));
     }
@@ -140,6 +146,7 @@ export class Player {
   #saveSession({ quiet = false } = {}) {
     if (!quiet) {
       this.notifyChange("state");
+      this.#schedulePreload();
     }
     if (this._restoring || !this.persist) {
       return;
@@ -260,6 +267,34 @@ export class Player {
     this.index = index;
     await this.#loadCurrent();
     this.#saveSession();
+  }
+
+  /**
+   * The queue index next() would move to without any side effects, or -1 when that
+   * is not knowable yet (end of queue, a shuffled wrap, an automix extension, or a
+   * track already known to be unplayable). Used to preload for gapless playback.
+   */
+  peekNextIndex() {
+    const len = this.queue.length;
+    if (!len || this.index < 0) {
+      return -1;
+    }
+    let at = -1;
+    if (this.repeat === "one") {
+      at = this.index;
+    } else if (this.index + 1 < len) {
+      at = this.index + 1;
+    } else if (this.repeat === "all" && !this.shuffle) {
+      at = 0;
+    }
+    if (at >= 0 && this.queue[at]?.playable === false) {
+      return -1;
+    }
+    return at;
+  }
+
+  get preloaded() {
+    return this._preloaded ? { ...this._preloaded } : null;
   }
 
   async next() {
@@ -672,10 +707,15 @@ export class Player {
   }
 
   prefetchNext() {
-    const next = this.queue[this.index + 1];
+    const peek = this.peekNextIndex();
+    const next = peek >= 0 ? this.queue[peek] : this.queue[this.index + 1];
     if (next?.id) {
       if (!this.cache.get(next.id)) {
-        this.#resolve(next.id).catch(() => {});
+        this.#resolve(next.id)
+          .then(() => this.#schedulePreload())
+          .catch(() => {});
+      } else {
+        this.#schedulePreload();
       }
       return;
     }
@@ -685,8 +725,9 @@ export class Player {
           if (added) {
             const upcoming = this.queue[this.index + 1];
             if (upcoming?.id && !this.cache.get(upcoming.id)) {
-              return this.#resolve(upcoming.id);
+              return this.#resolve(upcoming.id).then(() => this.#schedulePreload());
             }
+            this.#schedulePreload();
           }
           return null;
         })
@@ -755,6 +796,8 @@ export class Player {
       this.position = 0;
     }
     this._ignoreEof = true;
+    this._preloaded = null; // loadfile replace empties mpv's playlist
+    this._rolled = null;
     try {
       const cached = this.cache.get(track.id);
       let url = cached || (await this.#resolve(track.id));
@@ -819,7 +862,28 @@ export class Player {
     if (ev && MPV_CHANGE_EVENTS.has(ev.event)) {
       this.notifyChange(`mpv:${ev.event}${ev.name ? `:${ev.name}` : ""}`);
     }
+    if (ev?.event === "file-loaded" && this._rolled) {
+      this._rolled = null; // the preloaded stream opened fine
+      return;
+    }
     if (!ev || ev.event !== "end-file") {
+      return;
+    }
+    if (this._rolled && ev.reason === "error") {
+      // the stream we rolled over to would not open: mark it and move on as before
+      const id = this._rolled;
+      this._rolled = null;
+      if (this.queue[this.index]?.id === id) {
+        this.queue[this.index].playable = false;
+      }
+      if (!this._advancing) {
+        this._advancing = true;
+        this.next()
+          .catch(() => {})
+          .finally(() => {
+            this._advancing = false;
+          });
+      }
       return;
     }
     if (this._ignoreEof || this._advancing) {
@@ -828,12 +892,88 @@ export class Player {
     if (ev.reason && ev.reason !== "eof") {
       return;
     }
+    if (this.#rollOver()) {
+      return;
+    }
     this._advancing = true;
     this.next()
       .catch(() => {})
       .finally(() => {
         this._advancing = false;
       });
+  }
+
+  // mpv already moved on to the preloaded entry: only catch our bookkeeping up.
+  #rollOver() {
+    const pre = this._preloaded;
+    this._preloaded = null;
+    if (!pre || this.peekNextIndex() !== pre.index || this.queue[pre.index]?.id !== pre.id) {
+      return false;
+    }
+    this.index = pre.index;
+    this.position = 0;
+    this.state = "playing";
+    this._rolled = pre.id;
+    this.#saveSession();
+    this.prefetchNext();
+    this.#refreshRating(pre.id);
+    return true;
+  }
+
+  #schedulePreload() {
+    if (this._preloadTimer || this._restoring || typeof this.mpv?.append !== "function") {
+      return;
+    }
+    this._preloadTimer = setTimeout(() => {
+      this._preloadTimer = null;
+      this._preloadChain = this._preloadChain.then(() => this.syncPreload()).catch(() => {});
+    }, 40);
+    this._preloadTimer.unref?.();
+  }
+
+  /**
+   * Make mpv's playlist hold exactly [current, expected next] so the hand-over at
+   * end of file is gapless. Only queues a stream that is already resolved, and only
+   * while a file is loaded (never starts playback by itself).
+   */
+  async syncPreload() {
+    if (typeof this.mpv?.append !== "function" || typeof this.mpv?.command !== "function") {
+      return null;
+    }
+    const at = this.state === "stopped" ? -1 : this.peekNextIndex();
+    const track = at >= 0 ? this.queue[at] : null;
+    const url = track ? this.cache.get(track.id) : null;
+    const want = track && url ? { id: track.id, url, index: at } : null;
+    if (track && !url && this._resolvingPreload !== track.id) {
+      // resolve it in the background, then come back and queue it
+      this._resolvingPreload = track.id;
+      this.#resolve(track.id)
+        .then(() => this.#schedulePreload())
+        .catch(() => {})
+        .finally(() => {
+          if (this._resolvingPreload === track.id) {
+            this._resolvingPreload = null;
+          }
+        });
+    }
+    const have = this._preloaded;
+    if (have && want && have.id === want.id && have.url === want.url && have.index === want.index) {
+      return have;
+    }
+    if (!have && !want) {
+      return null;
+    }
+    this._preloaded = null;
+    try {
+      await this.mpv.command(["playlist-clear"]);
+      if (want && this.state !== "stopped") {
+        await this.mpv.append(want.url);
+        this._preloaded = want;
+      }
+    } catch {
+      this._preloaded = null;
+    }
+    return this._preloaded;
   }
 
   #shuffleRest({ wrap = false } = {}) {
