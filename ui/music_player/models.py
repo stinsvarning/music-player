@@ -155,6 +155,30 @@ class SeekGate:
         return target
 
 
+SEEK_END_MARGIN_S = 1.0
+
+
+def clamp_seek_target(target: float, duration: float, margin: float = SEEK_END_MARGIN_S) -> float:
+    """Clamp an absolute seek to [0, duration - margin].
+
+    Seeking to or past the end makes mpv finish the file, which looks like a skip
+    to the next track. With an unknown duration (<= 0) only the lower bound applies.
+    """
+    try:
+        value = float(target)
+    except (TypeError, ValueError):
+        value = 0.0
+    if value != value or value < 0:  # NaN or negative
+        value = 0.0
+    try:
+        dur = float(duration or 0.0)
+    except (TypeError, ValueError):
+        dur = 0.0
+    if dur > 0:
+        value = min(value, max(0.0, dur - margin))
+    return value
+
+
 def queue_needs_rebuild(old_ids: list[str], new_ids: list[str]) -> bool:
     return list(old_ids) != list(new_ids)
 

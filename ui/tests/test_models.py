@@ -5,6 +5,7 @@ from datetime import date
 from music_player.models import (
     BrowseState,
     SeekGate,
+    clamp_seek_target,
     Track,
     can_autoselect_playlist,
     default_queue_playlist_name,
@@ -52,6 +53,28 @@ class SeekGateTests(unittest.TestCase):
         gate.release(now=1.2)
         self.assertFalse(gate.follow_status(now=1.3))
         self.assertTrue(gate.follow_status(now=1.66))
+
+
+class ClampSeekTargetTests(unittest.TestCase):
+    """Seeking to or past the end must never reach mpv (it would skip a track)."""
+
+    def test_past_end_clamps_one_second_before_end(self):
+        self.assertAlmostEqual(clamp_seek_target(500.0, 200.0), 199.0)
+        self.assertAlmostEqual(clamp_seek_target(200.0, 200.0), 199.0)
+        self.assertAlmostEqual(clamp_seek_target(199.4, 200.0), 199.0)
+
+    def test_in_range_targets_pass_through(self):
+        self.assertAlmostEqual(clamp_seek_target(42.5, 200.0), 42.5)
+        self.assertAlmostEqual(clamp_seek_target(0.0, 200.0), 0.0)
+
+    def test_negative_and_garbage_become_zero(self):
+        self.assertEqual(clamp_seek_target(-5.0, 200.0), 0.0)
+        self.assertEqual(clamp_seek_target(float("nan"), 200.0), 0.0)
+        self.assertEqual(clamp_seek_target(None, 200.0), 0.0)
+
+    def test_unknown_or_tiny_duration(self):
+        self.assertAlmostEqual(clamp_seek_target(90.0, 0.0), 90.0)
+        self.assertEqual(clamp_seek_target(5.0, 0.5), 0.0)
 
 
 class LoginErrorTests(unittest.TestCase):

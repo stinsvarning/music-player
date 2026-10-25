@@ -302,6 +302,22 @@ class WindowChromeTests(unittest.TestCase):
         foot_h = foot.measure(Gtk.Orientation.VERTICAL, -1).natural
         self.assertEqual(top_h, foot_h)
 
+    def test_seek_keys_and_slider_never_seek_past_the_end(self):
+        from music_player.models import PlayerStatus
+
+        self.win.status = PlayerStatus(state="playing", position=178.0, duration=180.0)
+        self.cmds.clear()
+        self.assertTrue(self._key(Gdk.KEY_Right))
+        self.assertEqual(self.cmds[-1], {"cmd": "seek", "value": 179.0})
+        self.win.status = PlayerStatus(state="playing", position=2.0, duration=180.0)
+        self.assertTrue(self._key(Gdk.KEY_Left))
+        self.assertEqual(self.cmds[-1], {"cmd": "seek", "value": 0.0})
+        # slider dragged all the way to the end
+        self.cmds.clear()
+        self.win._seek.drag(180.0)
+        self.win._commit_seek(immediate=True)
+        self.assertEqual(self.cmds[-1], {"cmd": "seek", "value": 179.0})
+
     def test_window_keys_are_handled(self):
         keys = [
             (Gdk.KEY_space, False, {"cmd": "toggle"}),
