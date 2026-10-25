@@ -22,7 +22,9 @@ Version 0.2.0. Unofficial, and not affiliated with Google or YouTube. It uses th
 ## Features
 
 - **Your library.** Search songs, browse your playlists, and like the current track (it shows up in Liked Music). Premium audio quality is used when the browser session has Premium.
-- **Queue.** Drag to reorder, Delete to remove a row, and save one track or the whole queue to a new or existing playlist. Right-click a track to play it next, add it to the queue or start a mix. Right-click a playlist to start a mix, rename it or delete it.
+- **Queue.** Drag a row to reorder it (a thin line shows where it will land), or move the selected row with **Alt+↑/↓**. Right-click a queue row to play it next, move it to the top or bottom, start a mix, go to its artist or album, save it or the whole queue to a playlist, copy its link, remove it, or clear everything after the current track. Moving the playing row, or a song that is in the queue twice, never interrupts playback or the gapless hand-over.
+- **Undo.** Remove, Start mix and Clear upcoming can be undone with **Ctrl+Z** or the quiet *Removed · Undo* note in the footer (the last ten steps). If the song that was playing is still playing, it keeps playing; if the edit replaced it (a mix, or removing the playing row), it comes back where it was.
+- **Library menus.** Right-click a search result or playlist track to play it next, add it to the queue, start a mix, go to its artist or album (as a Library search), save it to a playlist or copy its `music.youtube.com` link. Right-click a playlist to start a mix, rename it or delete it.
 - **Playback.** Gapless: the next stream is already queued in mpv when a track ends. Shuffle, repeat (all or one), play similar when the queue runs out, and a sleep timer.
 - **Visualizer.** Three looks: bricks, wave and waterfall, plus off. Click the visualizer to cycle bricks → wave → waterfall → off. The player remembers your choice across restarts. It fills the LCD strip and the area around the deck, is capped at 60 fps, and its intensity follows the player volume. Off leaves a still, dark grid and also stops the audio analysis behind it, so it costs next to nothing.
 - **Omarchy theme.** Colours come from the current Omarchy theme and repaint live when you switch themes. Accent and peak colours can be overridden in the config.
@@ -96,11 +98,13 @@ Press **?** in the window for this list.
 | `n` / `p` | Next / previous |
 | `s` | Stop |
 | `←` / `→` | Seek 5 seconds |
-| `↑` / `↓` | Volume ±5 |
+| `↑` / `↓` | Volume ±5 (in a focused list: move the selection) |
 | `l` | Like or unlike |
 | `q` / `m` | Queue / Library view |
 | `/` or `Ctrl+F` | Search |
 | `Delete` | Remove the selected queue row |
+| `Alt+↑` / `Alt+↓` | Move the selected queue row up / down |
+| `Ctrl+Z` | Undo the last remove, mix or clear upcoming |
 | `Menu` or `Shift+F10` | Context menu |
 | `F11` | Fullscreen |
 | `Esc` | Leave the search field |
