@@ -69,6 +69,8 @@ export class Mpv {
         "--hr-seek=yes",
         "--force-seekable=yes",
         "--load-scripts=no",
+        "--prefetch-playlist=yes",
+        "--gapless-audio=weak",
         `--input-ipc-server=${this.socketPath}`,
         ...this.extraArgs,
       ],
