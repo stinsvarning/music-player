@@ -372,6 +372,8 @@ class DeckMixin:
         self.queue_list.connect("row-activated", self._on_queue_activate)
         drop = Gtk.DropTarget.new(GObject.TYPE_STRING, Gdk.DragAction.MOVE)
         drop.connect("drop", self._on_queue_drop)
+        drop.connect("motion", self._on_queue_drag_motion)
+        drop.connect("leave", self._clear_drop_line)
         self.queue_list.add_controller(drop)
         self.queue_scroll = constrain_scroll(Gtk.ScrolledWindow())
         self.queue_scroll.set_child(self.queue_list)

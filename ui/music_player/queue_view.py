@@ -191,6 +191,9 @@ class QueueViewMixin:
         self._ctx_pop = pop
 
     def _show_song_menu(self, row: Gtk.ListBoxRow, track: Track, source: str, gesture: Gtk.GestureClick) -> None:
+        parent = row.get_parent()
+        if isinstance(parent, Gtk.ListBox):
+            parent.select_row(row)  # the menu, Delete and alt+arrows all act on the same row
         self._popup_song_menu(row, track, source)
         gesture.set_state(Gtk.EventSequenceState.CLAIMED)
 
@@ -382,14 +385,53 @@ class QueueViewMixin:
         self._dragging = active
         if not active:
             self._drag_from = None
+            self._clear_drop_line()
+
+    def _drop_dest(self, y: float) -> int:
+        """Queue index a dragged row would land on when dropped at list y."""
+        dest_row = self.queue_list.get_row_at_y(int(y))
+        return dest_row.get_index() if dest_row is not None else len(self._queue) - 1
+
+    def _on_queue_drag_motion(self, _target, _x, y: float):
+        src = self._drag_from
+        if src is None:
+            self._clear_drop_line()
+            return Gdk.DragAction.MOVE
+        dest = self._drop_dest(y)
+        if dest < 0 or dest == src:
+            self._clear_drop_line()
+            return Gdk.DragAction.MOVE
+        # the row lands in dest's slot: after that row when moving down, before it when moving up
+        self._show_drop_line(dest, below=src < dest)
+        return Gdk.DragAction.MOVE
+
+    def _show_drop_line(self, index: int, *, below: bool) -> None:
+        want = (index, "drop-below" if below else "drop-above")
+        if getattr(self, "_drop_line", None) == want:
+            return
+        self._clear_drop_line()
+        row = self.queue_list.get_row_at_index(index)
+        if row is None:
+            return
+        row.add_css_class(want[1])
+        self._drop_line = want
+
+    def _clear_drop_line(self, *_a) -> None:
+        line = getattr(self, "_drop_line", None)
+        self._drop_line = None
+        if line is None:
+            return
+        row = self.queue_list.get_row_at_index(line[0])
+        if row is not None:
+            row.remove_css_class(line[1])
 
     def _on_queue_drop(self, _target, _value, _x, y: float) -> bool:
         src = self._drag_from
+        self._clear_drop_line()
         self._mark_dragging(False)
         if src is None:
             return False
-        dest_row = self.queue_list.get_row_at_y(int(y))
-        dest = dest_row.get_index() if dest_row is not None else len(self._queue) - 1
+        dest = self._drop_dest(y)
         if dest < 0 or dest == src:
             return True
         self._move_queue_row(src, dest)

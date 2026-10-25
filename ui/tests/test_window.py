@@ -406,6 +406,79 @@ class WindowChromeTests(unittest.TestCase):
         self._click_menu("Clear upcoming")
         self.assertEqual(self.cmds[-1], {"cmd": "queue.clear_upcoming"})
 
+    def _row_y(self, index):
+        row = self.win.queue_list.get_row_at_index(index)
+        ok, b = row.compute_bounds(self.win.queue_list)
+        return b.get_y() + b.get_height() / 2
+
+    def _drop_classes(self):
+        out = []
+        for i in range(len(self.win._queue)):
+            row = self.win.queue_list.get_row_at_index(i)
+            for name in ("drop-above", "drop-below"):
+                if row.has_css_class(name):
+                    out.append((i, name))
+        return out
+
+    def _realize(self):
+        self.win.present()
+        ctx = GLib.MainContext.default()
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            ctx.iteration(False)
+            row = self.win.queue_list.get_row_at_index(0)
+            if row is not None and row.get_height() > 0:
+                return
+        self.skipTest("rows never got a size")
+
+    def test_dragging_shows_a_thin_drop_line_where_the_row_lands(self):
+        self._queue_of(5, current=0)
+        self._realize()
+        self.win._on_drag_prepare(self.win.queue_list.get_row_at_index(1))
+        self.win._on_queue_drag_motion(None, 10, self._row_y(3))
+        self.assertEqual(self._drop_classes(), [(3, "drop-below")], "moving down lands after row 3")
+        self.win._on_queue_drag_motion(None, 10, self._row_y(1))
+        self.assertEqual(self._drop_classes(), [], "no line over the row itself")
+        self.win._on_drag_prepare(self.win.queue_list.get_row_at_index(4))
+        self.win._on_queue_drag_motion(None, 10, self._row_y(0))
+        self.assertEqual(self._drop_classes(), [(0, "drop-above")], "moving up lands before row 0")
+        self.cmds.clear()
+        self.assertTrue(self.win._on_queue_drop(None, "4", 10, self._row_y(0)))
+        self.assertEqual(self.cmds[-1], {"cmd": "queue.move", "from": 4, "to": 0})
+        self.assertEqual(self._drop_classes(), [], "the line goes away on drop")
+        self.assertEqual(self.win.queue_list.get_selected_row().get_index(), 0, "selection follows the dropped row")
+        self.assertEqual([t.id for t in self.win._queue], ["t4", "t0", "t1", "t2", "t3"])
+
+    def test_leaving_the_list_clears_the_drop_line(self):
+        self._queue_of(3)
+        self._realize()
+        self.win._on_drag_prepare(self.win.queue_list.get_row_at_index(0))
+        self.win._on_queue_drag_motion(None, 10, self._row_y(2))
+        self.assertTrue(self._drop_classes())
+        self.win._clear_drop_line()
+        self.assertEqual(self._drop_classes(), [])
+
+    def test_right_click_selects_the_row_first(self):
+        tracks = self._queue_of(4, current=0)
+        self.win.queue_list.select_row(self.win.queue_list.get_row_at_index(0))
+        row = self.win.queue_list.get_row_at_index(2)
+        self.win._show_song_menu(row, tracks[2], "queue", Gtk.GestureClick())
+        self.assertEqual(self.win.queue_list.get_selected_row().get_index(), 2)
+        self.win._dismiss_menu()
+        self.cmds.clear()
+        self.assertTrue(self._key(Gdk.KEY_Delete))
+        self.assertEqual(self.cmds[-1], {"cmd": "queue.remove", "index": 2})
+
+    def test_focus_does_not_start_on_the_account_link(self):
+        self.win.set_focus(self.win.btn_account)
+        self.win._initial_focus()
+        self.assertIsNot(self.win.get_focus(), self.win.btn_account)
+        self.win.set_focus(None)
+        self.win._initial_focus()
+        focus = self.win.get_focus()
+        if focus is not None:
+            self.assertTrue(self.win._queue_has_focus())
+
     def test_key_card_lists_queue_moves(self):
         from music_player.keys import HELP_LINES
 

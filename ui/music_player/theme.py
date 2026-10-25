@@ -682,6 +682,24 @@ def css_for(palette: Palette) -> str:
             color: {palette.accent};
             box-shadow: inset 5px 0 0 {palette.peak};
         }}
+        row.drop-above {{
+            box-shadow: inset 0 2px 0 {palette.accent};
+        }}
+        row.drop-below {{
+            box-shadow: inset 0 -2px 0 {palette.accent};
+        }}
+        row.current-track.drop-above {{
+            box-shadow: inset 5px 0 0 {palette.accent}, inset 0 2px 0 {palette.accent};
+        }}
+        row.current-track.drop-below {{
+            box-shadow: inset 5px 0 0 {palette.accent}, inset 0 -2px 0 {palette.accent};
+        }}
+        row.current-track.drop-above:selected {{
+            box-shadow: inset 5px 0 0 {palette.peak}, inset 0 2px 0 {palette.accent};
+        }}
+        row.current-track.drop-below:selected {{
+            box-shadow: inset 5px 0 0 {palette.peak}, inset 0 -2px 0 {palette.accent};
+        }}
         entry {{
             background: {palette.bg};
             color: {palette.fg};

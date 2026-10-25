@@ -66,6 +66,7 @@ class PlayerWindow(
         self._queue_sig = ""
         self._dragging = False
         self._drag_from: int | None = None
+        self._drop_line: tuple[int, str] | None = None  # (row index, css class) of the drop indicator
         self._ctx_pop: Gtk.Popover | None = None
         self._theme_monitors: list = []
         self._theme_reload_id = 0
@@ -120,6 +121,17 @@ class PlayerWindow(
         threading.Thread(target=self._command_loop, args=("transport",), name="music-transport", daemon=True).start()
         threading.Thread(target=self._command_loop, args=("query",), name="music-query", daemon=True).start()
         GLib.idle_add(self._bootstrap)
+        GLib.idle_add(self._initial_focus)
+
+    def _initial_focus(self) -> bool:
+        # GTK would hand focus to the first focusable widget (the Account link),
+        # so space opened the account menu instead of play/pause. Start on the
+        # queue list: space plays/pauses there, arrows walk the rows, tab still
+        # reaches every control.
+        focus = self.get_focus()
+        if focus is None or focus is getattr(self, "btn_account", None):
+            self.queue_list.grab_focus()
+        return False
 
     def stop_pump(self) -> None:
         self._pump_stop.set()
