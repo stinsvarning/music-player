@@ -682,6 +682,10 @@ def css_for(palette: Palette) -> str:
             color: {palette.accent};
             box-shadow: inset 5px 0 0 {palette.peak};
         }}
+        list:drop(active), row:drop(active) {{
+            box-shadow: none;
+            outline: none;
+        }}
         row.drop-above {{
             box-shadow: inset 0 2px 0 {palette.accent};
         }}

@@ -449,6 +449,17 @@ class WindowChromeTests(unittest.TestCase):
         self.assertEqual(self.win.queue_list.get_selected_row().get_index(), 0, "selection follows the dropped row")
         self.assertEqual([t.id for t in self.win._queue], ["t4", "t0", "t1", "t2", "t3"])
 
+    def test_drag_uses_the_row_as_its_icon_and_no_drop_glow(self):
+        self._queue_of(3)
+        row = self.win.queue_list.get_row_at_index(1)
+        self.win._on_drag_prepare(row, 12.0, 7.0)
+        self.win._on_drag_begin(Gtk.DragSource(), row)
+        self.assertTrue(self.win._dragging)
+        self.assertEqual(self.win._drag_hot, (12, 7))
+        self.win._mark_dragging(False)
+        css = self.win._css.to_string()
+        self.assertIn("drop(active)", css)
+
     def test_leaving_the_list_clears_the_drop_line(self):
         self._queue_of(3)
         self._realize()

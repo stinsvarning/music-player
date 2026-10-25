@@ -403,15 +403,22 @@ class QueueViewMixin:
     def _bind_queue_drag(self, row: Gtk.ListBoxRow) -> None:
         source = Gtk.DragSource()
         source.set_actions(Gdk.DragAction.MOVE)
-        source.connect("prepare", lambda *_a: self._on_drag_prepare(row))
-        source.connect("drag-begin", lambda *_a: self._mark_dragging(True))
+        source.connect("prepare", lambda _s, x, y: self._on_drag_prepare(row, x, y))
+        source.connect("drag-begin", lambda src, _d: self._on_drag_begin(src, row))
         source.connect("drag-end", lambda *_a: self._mark_dragging(False))
         row.add_controller(source)
 
-    def _on_drag_prepare(self, row: Gtk.ListBoxRow):
+    def _on_drag_prepare(self, row: Gtk.ListBoxRow, x: float = 0.0, y: float = 0.0):
         self._drag_from = row.get_index()
+        self._drag_hot = (int(x), int(y))
         self._mark_dragging(True)
         return Gdk.ContentProvider.new_for_value(str(self._drag_from))
+
+    def _on_drag_begin(self, source: Gtk.DragSource, row: Gtk.ListBoxRow) -> None:
+        # the row itself follows the pointer (GTK's default icon is the drag text, a stray digit)
+        hot_x, hot_y = getattr(self, "_drag_hot", (0, 0))
+        source.set_icon(Gtk.WidgetPaintable.new(row), hot_x, hot_y)
+        self._mark_dragging(True)
 
     def _mark_dragging(self, active: bool) -> None:
         self._dragging = active
