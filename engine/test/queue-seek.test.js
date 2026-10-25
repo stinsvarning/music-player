@@ -10,7 +10,7 @@ import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { Mpv } from "../src/mpv.js";
 import { unplayableError } from "../src/playable.js";
-import { Player, SEEK_END_MARGIN_S, clampSeek } from "../src/player.js";
+import { Player, SEEK_END_MARGIN_S, clampSeek, movedIndex } from "../src/player.js";
 import { dispatch } from "../src/server.js";
 
 function track(id, duration_secs = 10) {
@@ -307,6 +307,97 @@ test("removeAt still rejects bad indexes", async () => {
 });
 
 // ---- bug 2: seeking past the end ----
+
+// ---- moving queue rows ----
+
+test("movedIndex follows a row by position", () => {
+  // queue a b c d e, watching row 2 (c)
+  assert.equal(movedIndex(2, 2, 4), 4, "the row itself moves");
+  assert.equal(movedIndex(2, 0, 3), 1, "a row from above jumps below it");
+  assert.equal(movedIndex(2, 4, 1), 3, "a row from below jumps above it");
+  assert.equal(movedIndex(2, 3, 4), 2, "moves entirely below leave it alone");
+  assert.equal(movedIndex(2, 0, 1), 2, "moves entirely above leave it alone");
+  assert.equal(movedIndex(2, 0, 2), 1, "dropping into its slot pushes it up");
+  assert.equal(movedIndex(2, 4, 2), 3, "dropping into its slot from below pushes it down");
+});
+
+test("moving the playing row keeps that copy playing when the song is queued twice", async () => {
+  const { player, mpv } = setup(5);
+  await player.playIndex(1);
+  player.playNext(track("t2")); // t1 t2 t2 t3 t4 t5, playing the first t2
+  await settle();
+  assert.deepEqual(ids(player), ["t1", "t2", "t2", "t3", "t4", "t5"]);
+  await player.move(1, 4); // drag the playing row below its copy
+  assert.deepEqual(ids(player), ["t1", "t2", "t3", "t4", "t2", "t5"]);
+  assert.equal(player.index, 4, "not the first copy at row 1");
+  assert.equal(mpv.current, "mem://t2", "the song never restarts");
+  assert.equal(player.peekNextIndex(), 5);
+  assert.deepEqual(mpv.queued, [], "the stale copy is dropped from mpv right away");
+  await settle();
+  assert.deepEqual(mpv.queued, ["mem://t5"], "then the real next row is preloaded");
+});
+
+test("moving a row above a playing duplicate keeps the index on the playing copy", async () => {
+  const { player, mpv } = setup(3);
+  player.replaceQueue([track("t1"), track("t2"), track("t3"), track("t1")], 3);
+  await player.playIndex(3);
+  await player.move(1, 0); // t2 t1 t3 t1
+  assert.equal(player.index, 3);
+  assert.equal(player.queue[player.index].id, "t1");
+  assert.deepEqual(mpv.queued, [], "the last row has nothing after it");
+});
+
+test("moving the next row away re-preloads at once, not after the debounce", async () => {
+  const { player, mpv } = setup(4);
+  await player.playIndex(0);
+  await settle();
+  assert.deepEqual(mpv.queued, ["mem://t2"]);
+  await player.move(1, 3); // t1 t3 t4 t2
+  assert.deepEqual(mpv.queued, [], "no stale t2 left in mpv when move() resolves");
+  assert.equal(player.preloaded, null);
+  await settle();
+  assert.equal(player.preloaded?.id, "t3");
+  assert.deepEqual(mpv.queued, ["mem://t3"]);
+});
+
+test("end of file right after a move never plays the stale preloaded track", async () => {
+  const { player, mpv } = setup(4);
+  await player.playIndex(0);
+  await settle();
+  await loaded();
+  assert.deepEqual(mpv.queued, ["mem://t2"]);
+  const move = player.move(1, 3); // t1 t3 t4 t2 — the track ends in the same tick
+  mpv.finish();
+  await move;
+  await settle();
+  assert.equal(player.queue[player.index].id, "t3");
+  assert.equal(mpv.current, "mem://t3");
+  assert.ok(!mpv.loads.includes("mem://t2"), "the engine never adopts the stale entry");
+});
+
+test("a move that leaves the next row in place keeps mpv's entry untouched", async () => {
+  const { player, mpv } = setup(5);
+  await player.playIndex(1);
+  await settle();
+  assert.deepEqual(mpv.queued, ["mem://t3"]);
+  const before = mpv.commands.length;
+  await player.move(0, 4); // t2 t3 t4 t5 t1: playing row and its next both shift up
+  assert.equal(player.index, 0);
+  assert.equal(player.preloaded?.id, "t3");
+  assert.equal(player.preloaded?.index, 1);
+  assert.equal(mpv.commands.slice(before).includes("playlist-clear"), false);
+  assert.deepEqual(mpv.queued, ["mem://t3"]);
+});
+
+test("queue.move over the protocol rejects bad indexes and returns the new order", async () => {
+  const { player } = setup(3);
+  await player.playIndex(0);
+  const resp = await dispatch(player, {}, { cmd: "queue.move", from: 0, to: 2 });
+  assert.equal(resp.ok, true);
+  assert.deepEqual(resp.tracks.map((t) => t.id), ["t2", "t3", "t1"]);
+  assert.equal(resp.index, 2);
+  await assert.rejects(() => dispatch(player, {}, { cmd: "queue.move", from: 0, to: 9 }), /out of range/);
+});
 
 test("clampSeek keeps targets inside [0, duration - margin]", () => {
   assert.equal(SEEK_END_MARGIN_S, 1);

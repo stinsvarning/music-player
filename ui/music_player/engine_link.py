@@ -21,6 +21,7 @@ from .models import (
     pump_intervals,
     parse_tracks,
     should_apply_engine_rating,
+    UNDO_NOTES,
 )
 
 
@@ -172,7 +173,10 @@ class EngineLinkMixin:
             if payload.get("cmd") in {"track.like", "track.unlike"}:
                 GLib.idle_add(self._on_like_result, payload, resp)
             elif not resp.get("ok", True):
-                GLib.idle_add(self._set_footer, resp.get("error") or "engine error")
+                err = resp.get("error") or "engine error"
+                if payload.get("cmd") == "queue.undo" and "nothing to undo" in err:
+                    err = "nothing to undo"
+                GLib.idle_add(self._set_footer, err)
             elif payload.get("cmd") == "playlist.add":
                 GLib.idle_add(self._set_footer, "saved to playlist")
             elif payload.get("cmd") in {
@@ -182,10 +186,23 @@ class EngineLinkMixin:
                 "queue.remove",
                 "track.mix",
                 "playlist.mix",
+                "queue.clear_upcoming",
+                "queue.undo",
             }:
                 GLib.idle_add(self._refresh_queue)
+                GLib.idle_add(self._after_queue_edit, payload.get("cmd"), resp)
         except (OSError, EngineError) as exc:
             GLib.idle_add(self._note_link_down, str(exc))
+
+    def _after_queue_edit(self, cmd: str, resp: dict) -> bool:
+        if cmd == "queue.undo":
+            self._hide_undo_note()
+            self._set_footer("undone")
+        elif cmd == "queue.clear_upcoming" and not int(resp.get("removed") or 0):
+            self._set_footer("nothing after this track")
+        elif cmd in UNDO_NOTES:
+            self._show_undo_note(UNDO_NOTES[cmd])
+        return False
 
     def _queue_cmd(self, payload: dict, timeout: float = 20.0) -> None:
         name = lane_for(str(payload.get("cmd") or ""))

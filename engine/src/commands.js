@@ -27,7 +27,9 @@ export const COMMANDS = [
   { cmd: "queue.list", risk: "read", args: [], summary: "Queue tracks and current index" },
   { cmd: "queue.play", risk: "write", args: [arg("index", "number", true)], summary: "Play a queue index" },
   { cmd: "queue.move", risk: "write", args: [arg("from", "number", true), arg("to", "number", true)], summary: "Reorder the queue" },
-  { cmd: "queue.remove", risk: "write", args: [arg("index", "number", true)], summary: "Remove a queue row" },
+  { cmd: "queue.remove", risk: "write", args: [arg("index", "number", true)], summary: "Remove a queue row (undoable)" },
+  { cmd: "queue.clear_upcoming", risk: "write", args: [], summary: "Remove every row after the current track (undoable)" },
+  { cmd: "queue.undo", risk: "write", args: [], summary: "Undo the last remove, mix or clear upcoming (last 10)" },
   {
     cmd: "queue.save",
     risk: "write",

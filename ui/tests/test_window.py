@@ -229,6 +229,328 @@ class WindowChromeTests(unittest.TestCase):
         self.assertTrue(self._key(Gdk.KEY_Delete))
         self.assertEqual(self.cmds[-1], {"cmd": "queue.remove", "index": 1})
 
+    def _queue_of(self, n, current=0):
+        from music_player.models import Track
+
+        tracks = [Track(id=f"t{i}", title=f"T{i}") for i in range(n)]
+        self.win.status.index = current
+        self.win._render_queue(tracks, current)
+        return tracks
+
+    def _row_titles(self):
+        out = []
+        row = self.win.queue_list.get_first_child()
+        while row is not None:
+            texts = []
+            stack = [row]
+            while stack:
+                w = stack.pop()
+                if isinstance(w, Gtk.Label):
+                    texts.append(w.get_text())
+                c = w.get_last_child()
+                while c is not None:
+                    stack.append(c)
+                    c = c.get_prev_sibling()
+            out.append(texts[0] if texts else "")
+            row = row.get_next_sibling()
+        return out
+
+    def _current_rows(self):
+        out, i = [], 0
+        row = self.win.queue_list.get_first_child()
+        while row is not None:
+            if row.has_css_class("current-track"):
+                out.append(i)
+            i += 1
+            row = row.get_next_sibling()
+        return out
+
+    def test_alt_down_moves_the_selected_row_and_the_selection_follows(self):
+        self._queue_of(4, current=0)
+        self.win.queue_list.select_row(self.win.queue_list.get_row_at_index(1))
+        self.cmds.clear()
+        vol = self.win.volume.get_value()
+        state = Gdk.ModifierType.ALT_MASK
+        self.assertTrue(self.win._on_key(None, Gdk.KEY_Down, 0, state))
+        self.assertEqual(self.cmds[-1], {"cmd": "queue.move", "from": 1, "to": 2})
+        self.assertEqual([t.id for t in self.win._queue], ["t0", "t2", "t1", "t3"])
+        self.assertEqual(self.win.queue_list.get_selected_row().get_index(), 2)
+        self.assertTrue(self.win._on_key(None, Gdk.KEY_Up, 0, state))
+        self.assertTrue(self.win._on_key(None, Gdk.KEY_Up, 0, state))
+        self.assertEqual(self.cmds[-1], {"cmd": "queue.move", "from": 1, "to": 0})
+        self.assertEqual([t.id for t in self.win._queue], ["t1", "t0", "t2", "t3"])
+        self.assertEqual(self.win.queue_list.get_selected_row().get_index(), 0)
+        self.assertEqual(self._current_rows(), [1], "the playing marker follows the playing row")
+        self.assertEqual(self.win.volume.get_value(), vol, "alt+arrows never touch the volume")
+
+    def test_alt_up_on_the_first_row_does_nothing(self):
+        self._queue_of(3)
+        self.win.queue_list.select_row(self.win.queue_list.get_row_at_index(0))
+        self.cmds.clear()
+        self.assertTrue(self.win._on_key(None, Gdk.KEY_Up, 0, Gdk.ModifierType.ALT_MASK))
+        self.assertEqual(self.cmds, [])
+
+    def test_moved_rows_are_redrawn_in_the_new_order(self):
+        self._queue_of(4, current=2)
+        self.win._move_queue_row(0, 3)
+        titles = self._row_titles()
+        self.assertTrue(titles[0].endswith("T1") and titles[3].endswith("T0"), titles)
+        self.assertTrue(titles[0].startswith("01"), "row numbers follow the new order")
+        self.assertEqual(self._current_rows(), [1])
+
+    def _menu_labels(self):
+        out = []
+        stack = [self.win._ctx_pop]
+        while stack:
+            w = stack.pop()
+            if isinstance(w, Gtk.Button) and w.get_label():
+                out.append(w.get_label())
+            c = w.get_last_child()
+            while c is not None:
+                stack.append(c)
+                c = c.get_prev_sibling()
+        return out
+
+    def _click_menu(self, label):
+        stack = [self.win._ctx_pop]
+        while stack:
+            w = stack.pop()
+            if isinstance(w, Gtk.Button) and w.get_label() == label:
+                w.emit("clicked")
+                return
+            c = w.get_last_child()
+            while c is not None:
+                stack.append(c)
+                c = c.get_prev_sibling()
+        self.fail(f"no {label} in {self._menu_labels()}")
+
+    def test_queue_menu_play_next_and_move_to_top_bottom(self):
+        tracks = self._queue_of(5, current=1)
+        row = self.win.queue_list.get_row_at_index(4)
+        self.win._popup_song_menu(row, tracks[4], "queue")
+        self.assertIn("Play next", self._menu_labels())
+        self.cmds.clear()
+        self._click_menu("Play next")
+        self.assertEqual(self.cmds[-1], {"cmd": "queue.move", "from": 4, "to": 2})
+        self.assertEqual([t.id for t in self.win._queue], ["t0", "t1", "t4", "t2", "t3"])
+        row = self.win.queue_list.get_row_at_index(3)
+        self.win._popup_song_menu(row, self.win._queue[3], "queue")
+        self._click_menu("Move to top")
+        self.assertEqual(self.cmds[-1], {"cmd": "queue.move", "from": 3, "to": 0})
+        self.assertEqual(self.win.status.index, 2)
+        row = self.win.queue_list.get_row_at_index(0)
+        self.win._popup_song_menu(row, self.win._queue[0], "queue")
+        self.assertNotIn("Move to top", self._menu_labels())
+        self._click_menu("Move to bottom")
+        self.assertEqual(self.cmds[-1], {"cmd": "queue.move", "from": 0, "to": 4})
+        self.assertEqual(self.win.queue_list.get_selected_row().get_index(), 4)
+
+    def test_ctrl_z_sends_undo(self):
+        self.cmds.clear()
+        self.assertTrue(self._key(Gdk.KEY_z, ctrl=True))
+        self.assertEqual(self.cmds[-1], {"cmd": "queue.undo"})
+
+    def test_ctrl_z_in_the_find_box_stays_with_the_entry(self):
+        self.win.search_entry.has_focus = lambda: True  # a headless window never gets real focus
+        self.cmds.clear()
+        self.assertFalse(self._key(Gdk.KEY_z, ctrl=True))
+        self.assertEqual(self.cmds, [])
+
+    def test_undoable_edits_show_a_quiet_undo_note(self):
+        self.assertFalse(self.win.undo_note.get_visible())
+        self.win._after_queue_edit("queue.remove", {"ok": True})
+        self.assertTrue(self.win.undo_note.get_visible())
+        self.assertEqual(self.win.undo_label.get_text(), "Removed ·")
+        self.assertEqual(self.win.undo_button.get_label(), "Undo")
+        self.win._after_queue_edit("track.mix", {"ok": True})
+        self.assertEqual(self.win.undo_label.get_text(), "Mix started ·")
+        self.win._after_queue_edit("queue.clear_upcoming", {"ok": True, "removed": 4})
+        self.assertEqual(self.win.undo_label.get_text(), "Cleared upcoming ·")
+        self.cmds.clear()
+        self.win.undo_button.emit("clicked")
+        self.assertEqual(self.cmds[-1], {"cmd": "queue.undo"})
+        self.assertFalse(self.win.undo_note.get_visible())
+
+    def test_the_undo_note_fades_away(self):
+        from music_player import footer
+
+        self.win._after_queue_edit("queue.remove", {"ok": True})
+        self.assertTrue(self.win._undo_hold)
+        GLib.source_remove(self.win._undo_hold)
+        self.win._undo_hold = 0
+        old = footer.UNDO_FADE_MS
+        footer.UNDO_FADE_MS = 80
+        try:
+            self.win._fade_undo_note()
+            ctx = GLib.MainContext.default()
+            deadline = time.monotonic() + 2
+            while self.win.undo_note.get_visible() and time.monotonic() < deadline:
+                ctx.iteration(False)
+                time.sleep(0.01)
+        finally:
+            footer.UNDO_FADE_MS = old
+        self.assertFalse(self.win.undo_note.get_visible())
+
+    def test_clearing_nothing_and_undo_are_plain_notes(self):
+        self.win._after_queue_edit("queue.clear_upcoming", {"ok": True, "removed": 0})
+        self.assertFalse(self.win.undo_note.get_visible())
+        self.assertEqual(self.win.status_label.get_text(), "nothing after this track")
+        self.win._after_queue_edit("queue.undo", {"ok": True, "undone": "Removed"})
+        self.assertEqual(self.win.status_label.get_text(), "undone")
+        self.assertTrue(self.win.status_label.has_css_class("foot-note"))
+
+    def test_queue_menu_clear_upcoming(self):
+        tracks = self._queue_of(4, current=1)
+        self.win._popup_song_menu(self.win.queue_list.get_row_at_index(0), tracks[0], "queue")
+        self.cmds.clear()
+        self._click_menu("Clear upcoming")
+        self.assertEqual(self.cmds[-1], {"cmd": "queue.clear_upcoming"})
+
+    def _row_y(self, index):
+        row = self.win.queue_list.get_row_at_index(index)
+        ok, b = row.compute_bounds(self.win.queue_list)
+        return b.get_y() + b.get_height() / 2
+
+    def _drop_classes(self):
+        out = []
+        for i in range(len(self.win._queue)):
+            row = self.win.queue_list.get_row_at_index(i)
+            for name in ("drop-above", "drop-below"):
+                if row.has_css_class(name):
+                    out.append((i, name))
+        return out
+
+    def _realize(self):
+        self.win.present()
+        ctx = GLib.MainContext.default()
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            ctx.iteration(False)
+            row = self.win.queue_list.get_row_at_index(0)
+            if row is not None and row.get_height() > 0:
+                return
+        self.skipTest("rows never got a size")
+
+    def test_dragging_shows_a_thin_drop_line_where_the_row_lands(self):
+        self._queue_of(5, current=0)
+        self._realize()
+        self.win._on_drag_prepare(self.win.queue_list.get_row_at_index(1))
+        self.win._on_queue_drag_motion(None, 10, self._row_y(3))
+        self.assertEqual(self._drop_classes(), [(3, "drop-below")], "moving down lands after row 3")
+        self.win._on_queue_drag_motion(None, 10, self._row_y(1))
+        self.assertEqual(self._drop_classes(), [], "no line over the row itself")
+        self.win._on_drag_prepare(self.win.queue_list.get_row_at_index(4))
+        self.win._on_queue_drag_motion(None, 10, self._row_y(0))
+        self.assertEqual(self._drop_classes(), [(0, "drop-above")], "moving up lands before row 0")
+        self.cmds.clear()
+        self.assertTrue(self.win._on_queue_drop(None, "4", 10, self._row_y(0)))
+        self.assertEqual(self.cmds[-1], {"cmd": "queue.move", "from": 4, "to": 0})
+        self.assertEqual(self._drop_classes(), [], "the line goes away on drop")
+        self.assertEqual(self.win.queue_list.get_selected_row().get_index(), 0, "selection follows the dropped row")
+        self.assertEqual([t.id for t in self.win._queue], ["t4", "t0", "t1", "t2", "t3"])
+
+    def test_drag_uses_the_row_as_its_icon_and_no_drop_glow(self):
+        self._queue_of(3)
+        row = self.win.queue_list.get_row_at_index(1)
+        self.win._on_drag_prepare(row, 12.0, 7.0)
+        self.win._on_drag_begin(Gtk.DragSource(), row)
+        self.assertTrue(self.win._dragging)
+        self.assertEqual(self.win._drag_hot, (12, 7))
+        self.win._mark_dragging(False)
+        css = self.win._css.to_string()
+        self.assertIn("drop(active)", css)
+
+    def test_leaving_the_list_clears_the_drop_line(self):
+        self._queue_of(3)
+        self._realize()
+        self.win._on_drag_prepare(self.win.queue_list.get_row_at_index(0))
+        self.win._on_queue_drag_motion(None, 10, self._row_y(2))
+        self.assertTrue(self._drop_classes())
+        self.win._clear_drop_line()
+        self.assertEqual(self._drop_classes(), [])
+
+    def test_right_click_selects_the_row_first(self):
+        tracks = self._queue_of(4, current=0)
+        self.win.queue_list.select_row(self.win.queue_list.get_row_at_index(0))
+        row = self.win.queue_list.get_row_at_index(2)
+        self.win._show_song_menu(row, tracks[2], "queue", Gtk.GestureClick())
+        self.assertEqual(self.win.queue_list.get_selected_row().get_index(), 2)
+        self.win._dismiss_menu()
+        self.cmds.clear()
+        self.assertTrue(self._key(Gdk.KEY_Delete))
+        self.assertEqual(self.cmds[-1], {"cmd": "queue.remove", "index": 2})
+
+    def test_focus_does_not_start_on_the_account_link(self):
+        self.win.set_focus(self.win.btn_account)
+        self.win._initial_focus()
+        self.assertIsNot(self.win.get_focus(), self.win.btn_account)
+        self.win.set_focus(None)
+        self.win._initial_focus()
+        focus = self.win.get_focus()
+        if focus is not None:
+            self.assertTrue(self.win._queue_has_focus())
+
+    def test_copy_link_puts_the_music_link_on_the_clipboard(self):
+        from music_player.models import Track
+
+        track = Track(id="RE_XX6jk2Lo", title="Beyond", artist="Daft Punk")
+        self.win._copy_link(track)
+        clip = self.win.get_clipboard()
+        self.assertTrue(clip.is_local())
+        got = []
+        clip.read_text_async(None, lambda c, res: got.append(c.read_text_finish(res)))
+        ctx = GLib.MainContext.default()
+        deadline = time.monotonic() + 2
+        while not got and time.monotonic() < deadline:
+            ctx.iteration(False)
+            time.sleep(0.01)
+        self.assertEqual(got, ["https://music.youtube.com/watch?v=RE_XX6jk2Lo"])
+        self.assertEqual(self.win.status_label.get_text(), "link copied")
+
+    def test_go_to_artist_and_album_search_the_library(self):
+        from music_player.models import Track
+
+        track = Track(id="v", title="Voyager", artist="Daft Punk", album="Discovery")
+        self.win._queue = [track]
+        self.win._render_queue([track], 0)
+        sent = []
+        self.win.ipc.request = lambda payload, **_k: sent.append(payload) or {"ok": True, "tracks": []}
+        self.win._popup_song_menu(self.win.queue_list.get_row_at_index(0), track, "queue")
+        self._click_menu("Go to artist")
+        self.assertEqual(self.win.body_stack.get_visible_child_name(), "library")
+        self.assertEqual(self.win.search_entry.get_text(), "Daft Punk")
+        self.win._popup_song_menu(self.win.queue_list.get_row_at_index(0), track, "queue")
+        self._click_menu("Go to album")
+        self.assertEqual(self.win.search_entry.get_text(), "Discovery Daft Punk")
+        ctx = GLib.MainContext.default()
+        deadline = time.monotonic() + 2
+        while len(sent) < 2 and time.monotonic() < deadline:
+            ctx.iteration(False)
+            time.sleep(0.01)
+        self.assertIn({"cmd": "search", "query": "Discovery Daft Punk"}, sent)
+
+    def test_song_menus_have_thin_rules_between_sections(self):
+        tracks = self._queue_of(4, current=0)
+        self.win._popup_song_menu(self.win.queue_list.get_row_at_index(2), tracks[2], "queue")
+        rules = []
+        stack = [self.win._ctx_pop]
+        while stack:
+            w = stack.pop()
+            if isinstance(w, Gtk.Separator):
+                rules.append(w)
+            c = w.get_first_child()
+            while c is not None:
+                stack.append(c)
+                c = c.get_next_sibling()
+        self.assertEqual(len(rules), 3)
+        self.assertTrue(all(r.has_css_class("ctx-rule") for r in rules))
+
+    def test_key_card_lists_queue_moves(self):
+        from music_player.keys import HELP_LINES
+
+        self.assertTrue(any(line.startswith("alt+up") for line in HELP_LINES))
+        self.assertTrue(any(line.startswith("ctrl+z") for line in HELP_LINES))
+
     def test_no_thumbs_down_control(self):
         self.assertFalse(hasattr(self.win, "btn_dislike"))
         icon = ROOT / "ui" / "music_player" / "icons" / "hicolor" / "scalable" / "actions" / "music-thumb-down-symbolic.svg"

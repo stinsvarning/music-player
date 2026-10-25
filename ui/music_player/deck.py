@@ -262,6 +262,22 @@ class DeckMixin:
         self.status_label.set_valign(Gtk.Align.CENTER)
         foot.append(self.status_dot)
         foot.append(self.status_label)
+        # "Removed · Undo" after an undoable queue edit; fades on its own.
+        self.undo_note = Gtk.Box(spacing=6)
+        self.undo_note.add_css_class("undo-note")
+        self.undo_note.set_valign(Gtk.Align.CENTER)
+        self.undo_label = Gtk.Label(label="")
+        self.undo_label.add_css_class("meta")
+        self.undo_button = Gtk.Button(label="Undo")
+        self.undo_button.add_css_class("flat")
+        self.undo_button.add_css_class("undo-link")
+        self.undo_button.set_tooltip_text("Undo (ctrl+z)")
+        self.undo_button.set_focus_on_click(False)
+        self.undo_button.connect("clicked", lambda *_a: self._undo())
+        self.undo_note.append(self.undo_label)
+        self.undo_note.append(self.undo_button)
+        self.undo_note.set_visible(False)
+        foot.append(self.undo_note)
         return foot
 
     def _body(self) -> Gtk.Widget:
@@ -356,6 +372,8 @@ class DeckMixin:
         self.queue_list.connect("row-activated", self._on_queue_activate)
         drop = Gtk.DropTarget.new(GObject.TYPE_STRING, Gdk.DragAction.MOVE)
         drop.connect("drop", self._on_queue_drop)
+        drop.connect("motion", self._on_queue_drag_motion)
+        drop.connect("leave", self._clear_drop_line)
         self.queue_list.add_controller(drop)
         self.queue_scroll = constrain_scroll(Gtk.ScrolledWindow())
         self.queue_scroll.set_child(self.queue_list)

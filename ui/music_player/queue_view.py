@@ -13,9 +13,15 @@ from .models import (
     PlaylistInfo,
     Track,
     default_queue_playlist_name,
+    album_query,
+    artist_query,
     format_time,
+    menu_sections,
+    moved_index,
+    play_next_target,
     queue_needs_rebuild,
     song_menu_actions,
+    track_link,
 )
 
 
@@ -29,16 +35,22 @@ class QueueViewMixin:
             return
         self._queue_cmd({"cmd": "queue.play", "index": idx})
 
-    def _render_queue(self, tracks: list[Track], index: int) -> None:
-        old_ids = [t.id for t in self._queue]
+    def _render_queue(self, tracks: list[Track], index: int, *, select_index: int | None = None) -> None:
+        old_ids = list(self._row_ids)
         new_ids = [t.id for t in tracks]
-        self._queue = tracks
+        self._queue = list(tracks)
         self.queue_empty.set_visible(not tracks)
         if not queue_needs_rebuild(old_ids, new_ids) and self.queue_list.get_first_child() is not None:
             self._mark_current_row(index)
+            if select_index is not None:
+                self._select_queue_row(select_index, focus=False)
             return
         selected = self.queue_list.get_selected_row()
         sel_idx = selected.get_index() if selected is not None else None
+        if select_index is not None:
+            sel_idx = select_index
+        had_focus = self._queue_has_focus()
+        self._row_ids = new_ids
         adj = self.queue_scroll.get_vadjustment()
         pos = adj.get_value() if adj is not None else 0.0
         self._clear(self.queue_list)
@@ -56,12 +68,54 @@ class QueueViewMixin:
             if adj is not None:
                 adj.set_value(pos)
             if sel_idx is not None:
-                keep = self.queue_list.get_row_at_index(sel_idx)
-                if keep is not None:
-                    self.queue_list.select_row(keep)
+                self._select_queue_row(sel_idx, focus=had_focus)
             return False
 
+        if sel_idx is not None:
+            self._select_queue_row(sel_idx, focus=had_focus)
         GLib.idle_add(restore)
+
+    def _queue_has_focus(self) -> bool:
+        focus = self.get_focus()
+        while focus is not None:
+            if focus is self.queue_list:
+                return True
+            focus = focus.get_parent()
+        return False
+
+    def _select_queue_row(self, index: int, *, focus: bool) -> None:
+        row = self.queue_list.get_row_at_index(index)
+        if row is None:
+            return
+        self.queue_list.select_row(row)
+        if focus:
+            row.grab_focus()
+
+    def _move_queue_row(self, src: int, dest: int) -> bool:
+        """Move one queue row (engine + an optimistic local re-render); the
+        selection follows the moved row."""
+        total = len(self._queue)
+        if not (0 <= src < total) or not (0 <= dest < total) or src == dest:
+            return False
+        self._queue_cmd({"cmd": "queue.move", "from": src, "to": dest})
+        tracks = list(self._queue)
+        item = tracks.pop(src)
+        tracks.insert(dest, item)
+        current = moved_index(self.status.index, src, dest) if self.status.index >= 0 else -1
+        self.status.index = current
+        self._render_queue(tracks, current, select_index=dest)
+        return True
+
+    def _move_selected_queue_row(self, delta: int) -> bool:
+        if self.body_stack.get_visible_child_name() != "queue":
+            return False
+        row = self.queue_list.get_selected_row()
+        if row is None:
+            return False
+        src = row.get_index()
+        dest = max(0, min(len(self._queue) - 1, src + delta))
+        self._move_queue_row(src, dest)
+        return True
 
     def _mark_current_row(self, index: int) -> None:
         row = self.queue_list.get_first_child()
@@ -105,19 +159,44 @@ class QueueViewMixin:
             self._dismiss_menu()
             fn()
 
-        for label in song_menu_actions(source):
-            if label == "Start mix":
-                box.append(self._menu_button(label, lambda: run(lambda: self._start_mix(track))))
-            elif label == "Play next":
-                box.append(self._menu_button(label, lambda: run(lambda: self._play_next(track))))
-            elif label == "Add to queue":
-                box.append(self._menu_button(label, lambda: run(lambda: self._add_to_queue(track))))
-            elif label == "Save this track…":
-                box.append(self._menu_button(label, lambda: self._show_save_menu(pop, row, track, source)))
-            elif label == "Save entire queue…":
-                box.append(self._menu_button(label, lambda: self._show_save_queue_menu(pop, row, track, source)))
-            elif label == "Remove":
-                box.append(self._menu_button(label, lambda: run(lambda: self._remove_from_queue(row.get_index()))))
+        idx = row.get_index() if source == "queue" else -1
+        current = self.status.index if source == "queue" else -1
+        actions = song_menu_actions(
+            source,
+            row=idx,
+            current=current,
+            total=len(self._queue),
+            artist=bool(artist_query(track)),
+            album=bool(album_query(track)),
+        )
+        handlers = {
+            "Move to top": lambda: run(lambda: self._move_queue_row(row.get_index(), 0)),
+            "Move to bottom": lambda: run(lambda: self._move_queue_row(row.get_index(), len(self._queue) - 1)),
+            "Start mix": lambda: run(lambda: self._start_mix(track)),
+            "Add to queue": lambda: run(lambda: self._add_to_queue(track)),
+            "Go to artist": lambda: run(lambda: self._search_library(artist_query(track))),
+            "Go to album": lambda: run(lambda: self._search_library(album_query(track))),
+            "Save this track…": lambda: self._show_save_menu(pop, row, track, source),
+            "Save entire queue…": lambda: self._show_save_queue_menu(pop, row, track, source),
+            "Copy link": lambda: run(lambda: self._copy_link(track)),
+            "Remove": lambda: run(lambda: self._remove_from_queue(row.get_index())),
+            "Clear upcoming": lambda: run(self._clear_upcoming),
+        }
+        if source == "queue":
+            handlers["Play next"] = lambda: run(
+                lambda: self._move_queue_row(row.get_index(), play_next_target(row.get_index(), self.status.index))
+            )
+        else:
+            handlers["Play next"] = lambda: run(lambda: self._play_next(track))
+        for n, section in enumerate(menu_sections(actions)):
+            if n:
+                rule = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+                rule.add_css_class("ctx-rule")
+                box.append(rule)
+            for label in section:
+                fn = handlers.get(label)
+                if fn is not None:
+                    box.append(self._menu_button(label, fn))
         pop.set_child(box)
 
     def _popup_song_menu(self, row: Gtk.ListBoxRow, track: Track, source: str) -> None:
@@ -131,6 +210,9 @@ class QueueViewMixin:
         self._ctx_pop = pop
 
     def _show_song_menu(self, row: Gtk.ListBoxRow, track: Track, source: str, gesture: Gtk.GestureClick) -> None:
+        parent = row.get_parent()
+        if isinstance(parent, Gtk.ListBox):
+            parent.select_row(row)  # the menu, Delete and alt+arrows all act on the same row
         self._popup_song_menu(row, track, source)
         gesture.set_state(Gtk.EventSequenceState.CLAIMED)
 
@@ -204,6 +286,22 @@ class QueueViewMixin:
 
     def _add_to_queue(self, track: Track) -> None:
         self._queue_cmd({"cmd": "track.queue", "track": track.to_ipc()})
+
+    def _search_library(self, query: str) -> None:
+        """Go to artist / album: a Library search for it (the engine has no browse ids)."""
+        if not query:
+            return
+        self._show_library()
+        self.search_entry.set_text(query)
+        self._on_search()
+
+    def _copy_link(self, track: Track) -> None:
+        link = track_link(track.id)
+        self.get_clipboard().set_content(Gdk.ContentProvider.new_for_value(link))
+        self._set_footer("link copied")
+
+    def _clear_upcoming(self) -> None:
+        self._queue_cmd({"cmd": "queue.clear_upcoming"})
 
     def _remove_from_queue(self, index: int) -> None:
         self._queue_cmd({"cmd": "queue.remove", "index": index})
@@ -305,39 +403,75 @@ class QueueViewMixin:
     def _bind_queue_drag(self, row: Gtk.ListBoxRow) -> None:
         source = Gtk.DragSource()
         source.set_actions(Gdk.DragAction.MOVE)
-        source.connect("prepare", lambda *_a: self._on_drag_prepare(row))
-        source.connect("drag-begin", lambda *_a: self._mark_dragging(True))
+        source.connect("prepare", lambda _s, x, y: self._on_drag_prepare(row, x, y))
+        source.connect("drag-begin", lambda src, _d: self._on_drag_begin(src, row))
         source.connect("drag-end", lambda *_a: self._mark_dragging(False))
         row.add_controller(source)
 
-    def _on_drag_prepare(self, row: Gtk.ListBoxRow):
+    def _on_drag_prepare(self, row: Gtk.ListBoxRow, x: float = 0.0, y: float = 0.0):
         self._drag_from = row.get_index()
+        self._drag_hot = (int(x), int(y))
         self._mark_dragging(True)
         return Gdk.ContentProvider.new_for_value(str(self._drag_from))
+
+    def _on_drag_begin(self, source: Gtk.DragSource, row: Gtk.ListBoxRow) -> None:
+        # the row itself follows the pointer (GTK's default icon is the drag text, a stray digit)
+        hot_x, hot_y = getattr(self, "_drag_hot", (0, 0))
+        source.set_icon(Gtk.WidgetPaintable.new(row), hot_x, hot_y)
+        self._mark_dragging(True)
 
     def _mark_dragging(self, active: bool) -> None:
         self._dragging = active
         if not active:
             self._drag_from = None
+            self._clear_drop_line()
+
+    def _drop_dest(self, y: float) -> int:
+        """Queue index a dragged row would land on when dropped at list y."""
+        dest_row = self.queue_list.get_row_at_y(int(y))
+        return dest_row.get_index() if dest_row is not None else len(self._queue) - 1
+
+    def _on_queue_drag_motion(self, _target, _x, y: float):
+        src = self._drag_from
+        if src is None:
+            self._clear_drop_line()
+            return Gdk.DragAction.MOVE
+        dest = self._drop_dest(y)
+        if dest < 0 or dest == src:
+            self._clear_drop_line()
+            return Gdk.DragAction.MOVE
+        # the row lands in dest's slot: after that row when moving down, before it when moving up
+        self._show_drop_line(dest, below=src < dest)
+        return Gdk.DragAction.MOVE
+
+    def _show_drop_line(self, index: int, *, below: bool) -> None:
+        want = (index, "drop-below" if below else "drop-above")
+        if getattr(self, "_drop_line", None) == want:
+            return
+        self._clear_drop_line()
+        row = self.queue_list.get_row_at_index(index)
+        if row is None:
+            return
+        row.add_css_class(want[1])
+        self._drop_line = want
+
+    def _clear_drop_line(self, *_a) -> None:
+        line = getattr(self, "_drop_line", None)
+        self._drop_line = None
+        if line is None:
+            return
+        row = self.queue_list.get_row_at_index(line[0])
+        if row is not None:
+            row.remove_css_class(line[1])
 
     def _on_queue_drop(self, _target, _value, _x, y: float) -> bool:
         src = self._drag_from
+        self._clear_drop_line()
         self._mark_dragging(False)
         if src is None:
             return False
-        dest_row = self.queue_list.get_row_at_y(int(y))
-        dest = dest_row.get_index() if dest_row is not None else len(self._queue) - 1
+        dest = self._drop_dest(y)
         if dest < 0 or dest == src:
             return True
-        self._queue_cmd({"cmd": "queue.move", "from": src, "to": dest})
-        item = self._queue.pop(src)
-        self._queue.insert(dest, item)
-        current = self.status.index
-        if current == src:
-            current = dest
-        elif src < current <= dest:
-            current -= 1
-        elif dest <= current < src:
-            current += 1
-        self._render_queue(self._queue, current)
+        self._move_queue_row(src, dest)
         return True

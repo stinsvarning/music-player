@@ -188,14 +188,102 @@ def default_queue_playlist_name(when: date | None = None) -> str:
     return f"Queue {day.isoformat()}"
 
 
-def song_menu_actions(source: str) -> list[str]:
-    actions = ["Start mix"]
+def song_menu_actions(
+    source: str,
+    *,
+    row: int = -1,
+    current: int = -1,
+    total: int = 0,
+    artist: bool = True,
+    album: bool = True,
+) -> list[str]:
+    """Menu labels for a track row. Queue rows get move actions that make sense
+    for where the row sits (`row`) relative to the playing one (`current`);
+    Go to artist/album only show when the track names one."""
+    go = (["Go to artist"] if artist else []) + (["Go to album"] if album else [])
     if source != "queue":
-        actions.extend(["Play next", "Add to queue"])
-    actions.append("Save this track…")
-    if source == "queue":
-        actions.extend(["Save entire queue…", "Remove"])
+        return ["Play next", "Add to queue", "Start mix", *go, "Save this track…", "Copy link"]
+    actions = []
+    if row < 0 or (row != current and row != current + 1):
+        actions.append("Play next")
+    if row != 0:
+        actions.append("Move to top")
+    if row < 0 or row != total - 1:
+        actions.append("Move to bottom")
+    actions.extend(["Start mix", *go, "Save this track…", "Save entire queue…", "Copy link", "Remove"])
+    if row < 0 or current + 1 < total:
+        actions.append("Clear upcoming")
     return actions
+
+
+# Song menu sections; a thin rule sits between them.
+_MENU_GROUP = {
+    "Play next": 0,
+    "Add to queue": 0,
+    "Move to top": 0,
+    "Move to bottom": 0,
+    "Start mix": 1,
+    "Go to artist": 1,
+    "Go to album": 1,
+    "Save this track…": 2,
+    "Save entire queue…": 2,
+    "Copy link": 2,
+    "Remove": 3,
+    "Clear upcoming": 3,
+}
+
+
+def menu_sections(actions: list[str]) -> list[list[str]]:
+    out: list[list[str]] = []
+    last = None
+    for label in actions:
+        group = _MENU_GROUP.get(label, 9)
+        if group != last:
+            out.append([])
+            last = group
+        out[-1].append(label)
+    return out
+
+
+def track_link(track_id: str) -> str:
+    return f"https://music.youtube.com/watch?v={track_id}"
+
+
+def artist_query(track: "Track") -> str:
+    return (track.artist or "").strip()
+
+
+def album_query(track: "Track") -> str:
+    album = (track.album or "").strip()
+    artist = (track.artist or "").strip()
+    return f"{album} {artist}".strip() if album else ""
+
+
+# Footer note after an undoable queue edit, keyed by the engine command.
+UNDO_NOTES = {
+    "queue.remove": "Removed",
+    "track.mix": "Mix started",
+    "playlist.mix": "Mix started",
+    "queue.clear_upcoming": "Cleared upcoming",
+}
+
+
+def play_next_target(row: int, current: int) -> int:
+    """Queue index a row moves to so it plays right after the current one."""
+    if current < 0:
+        return 0
+    return current if row < current else current + 1
+
+
+def moved_index(at: int, src: int, dest: int) -> int:
+    """Where row `at` ends up after the row at `src` moves to `dest` (as the engine does)."""
+    if at == src:
+        return dest
+    if src < at <= dest:
+        return at - 1
+    if dest <= at < src:
+        return at + 1
+    return at
 
 
 def playlist_edit_id(pid: str) -> str:

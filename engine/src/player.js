@@ -6,6 +6,33 @@ import { spectrumDir } from "./paths.js";
 import { isUnplayableError, unplayableError } from "./playable.js";
 import { parseSession } from "./session.js";
 
+/** Index of `id` in `queue` closest to `near` (ties go down the queue), or -1. */
+function nearestIndexOf(queue, id, near) {
+  let best = -1;
+  for (let i = 0; i < queue.length; i += 1) {
+    if (queue[i]?.id === id && (best < 0 || Math.abs(i - near) < Math.abs(best - near))) {
+      best = i;
+    }
+  }
+  return best;
+}
+
+/** Where row `at` ends up after the row at `from` moves to `to`. */
+export function movedIndex(at, from, to) {
+  if (at === from) {
+    return to;
+  }
+  if (from < at && to >= at) {
+    return at - 1;
+  }
+  if (from > at && to <= at) {
+    return at + 1;
+  }
+  return at;
+}
+
+export const UNDO_LIMIT = 10;
+
 export class Player {
   constructor({ mpv, youtube, readBands, persist, cache } = {}) {
     this.mpv = mpv;
@@ -44,6 +71,7 @@ export class Player {
     this._preloadTimer = null;
     this._preloadChain = Promise.resolve();
     this._rolled = null; // id we rolled over to, until mpv confirms it loaded
+    this._undo = []; // queue snapshots for queue.undo, newest last (see undo())
     if (typeof this.mpv?.onEvent === "function") {
       this.mpv.onEvent((ev) => this.#onMpvEvent(ev));
     }
@@ -259,21 +287,41 @@ export class Player {
     this.#saveSession();
   }
 
-  move(from, to) {
+  /**
+   * Reorder the queue. The playing row is followed by position, not by id, so a
+   * song that sits in the queue twice keeps the right copy playing. If the row
+   * mpv has preloaded for gapless is no longer what comes next, mpv's playlist
+   * is fixed at once (like removeAt) instead of on the debounce timer, so an end
+   * of file right after the move can never hand over to a stale entry.
+   */
+  move(rawFrom, rawTo) {
+    const from = Number(rawFrom);
+    const to = Number(rawTo);
     const len = this.queue.length;
-    if (!len || from === to) {
-      return;
-    }
-    if (from < 0 || to < 0 || from >= len || to >= len) {
+    if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to < 0 || from >= len || to >= len) {
       throw new Error("queue index out of range");
     }
-    const currentId = this.index >= 0 ? this.queue[this.index]?.id : null;
+    if (from === to) {
+      return Promise.resolve();
+    }
     const [item] = this.queue.splice(from, 1);
     this.queue.splice(to, 0, item);
-    if (currentId) {
-      this.index = this.queue.findIndex((t) => t.id === currentId);
+    if (this.index >= 0) {
+      this.index = movedIndex(this.index, from, to);
+    }
+    const pre = this._preloaded;
+    let stalePreload = false;
+    if (pre) {
+      const at = movedIndex(pre.index, from, to);
+      if (at === this.peekNextIndex() && this.queue[at]?.id === pre.id) {
+        this._preloaded = { ...pre, index: at };
+      } else {
+        this._preloaded = null; // a roll-over now re-checks via next()
+        stalePreload = true;
+      }
     }
     this.#saveSession();
+    return this.#resyncPreloadNow({ clear: stalePreload });
   }
 
   /**
@@ -290,6 +338,11 @@ export class Player {
     const wasCurrent = index === this.index;
     const live = wasCurrent && this.state !== "stopped";
     const keepPaused = this.state === "paused";
+    const snap = this.#undoSnapshot("Removed");
+    this.#pushUndo(snap);
+    if (live) {
+      snap.position = await this.#livePosition();
+    }
     this.queue.splice(index, 1);
     if (index < this.index) {
       this.index -= 1;
@@ -309,6 +362,7 @@ export class Player {
     if (wasCurrent) {
       this.position = 0;
     }
+    snap.afterId = this.queue[this.index]?.id ?? null;
     if (!this.queue.length) {
       this.index = -1;
       if (live) {
@@ -750,12 +804,136 @@ export class Player {
     if (!tracks.length) {
       throw new Error("mix returned no tracks");
     }
+    const snap = this.#undoSnapshot("Mix started");
+    snap.position = await this.#livePosition();
+    this.#pushUndo(snap);
     const seed = seedId ? tracks.findIndex((t) => t.id === seedId) : 0;
     this.queue = tracks;
     this.index = seed >= 0 ? seed : 0;
     this.automix = true;
+    snap.afterId = this.queue[this.index]?.id ?? null;
     await this.#loadCurrent();
     this.#saveSession();
+  }
+
+  /**
+   * Drop every row after the playing one (the whole queue when nothing is
+   * current). Undoable. Returns how many rows went.
+   */
+  async clearUpcoming() {
+    const keep = this.index < 0 ? 0 : this.index + 1;
+    const removed = Math.max(0, this.queue.length - keep);
+    if (!removed) {
+      return 0;
+    }
+    const snap = this.#undoSnapshot("Cleared upcoming");
+    this.queue.splice(keep);
+    snap.afterId = snap.currentId;
+    this.#pushUndo(snap);
+    const stale = Boolean(this._preloaded);
+    this._preloaded = null;
+    if (!this.queue.length) {
+      this.index = -1;
+    }
+    this.#saveSession();
+    await this.#resyncPreloadNow({ clear: stale });
+    return removed;
+  }
+
+  /** Label of what queue.undo would undo next, or null. */
+  get undoLabel() {
+    return this._undo.length ? this._undo[this._undo.length - 1].label : null;
+  }
+
+  /**
+   * Undo the last Remove, Start mix or Clear upcoming (a stack of UNDO_LIMIT).
+   * The queue comes back exactly as it was. Playback:
+   * - the song that was playing before the action is still playing: it keeps
+   *   playing untouched (only the queue around it changes);
+   * - the action left the song alone but you have moved on since: whatever is
+   *   playing now keeps playing if it is in the restored queue;
+   * - the action replaced the song (Start mix, removing the playing row): the
+   *   old song comes back at the position it had, in the current play/pause
+   *   state. If playback is stopped now it stays stopped, ready at that spot.
+   */
+  async undo() {
+    const snap = this._undo.pop();
+    if (!snap) {
+      throw new Error("nothing to undo");
+    }
+    const nowId = this.index >= 0 ? (this.queue[this.index]?.id ?? null) : null;
+    const live = this.state !== "stopped";
+    this.queue = snap.queue.map((t) => ({ ...t }));
+    if (snap.automix != null) {
+      this.automix = snap.automix;
+    }
+    const stale = Boolean(this._preloaded);
+    this._preloaded = null;
+    const done = async () => {
+      this.#saveSession();
+      await this.#resyncPreloadNow({ clear: stale });
+      return { label: snap.label, index: this.index };
+    };
+    if (!this.queue.length) {
+      this.index = -1;
+      return done();
+    }
+    const at = Math.min(Math.max(snap.index, 0), this.queue.length - 1);
+    if (live && nowId && nowId === snap.currentId && this.queue[at]?.id === nowId) {
+      this.index = at;
+      return done();
+    }
+    if (live && nowId && snap.afterId === snap.currentId) {
+      const found = nearestIndexOf(this.queue, nowId, at);
+      if (found >= 0) {
+        this.index = found;
+        return done();
+      }
+    }
+    this.index = snap.index < 0 ? -1 : at;
+    if (this.index < 0) {
+      return done();
+    }
+    this.position = snap.position || 0;
+    if (!live) {
+      return done();
+    }
+    await this.#loadCurrent({ keepPosition: true, paused: this.state === "paused" });
+    this.#saveSession();
+    return { label: snap.label, index: this.index };
+  }
+
+  #undoSnapshot(label) {
+    return {
+      label,
+      queue: this.queue.map((t) => ({ ...t })),
+      index: this.index,
+      currentId: this.index >= 0 ? (this.queue[this.index]?.id ?? null) : null,
+      afterId: null,
+      position: this.position,
+      automix: this.automix,
+    };
+  }
+
+  #pushUndo(snap) {
+    this._undo.push(snap);
+    if (this._undo.length > UNDO_LIMIT) {
+      this._undo.splice(0, this._undo.length - UNDO_LIMIT);
+    }
+  }
+
+  async #livePosition() {
+    if (this.state !== "stopped" && typeof this.mpv?.get === "function") {
+      try {
+        const live = await this.mpv.get("time-pos");
+        if (Number.isFinite(live)) {
+          return live;
+        }
+      } catch {
+        /* idle mpv */
+      }
+    }
+    return this.position;
   }
 
   setRating(id, rating) {

@@ -530,6 +530,21 @@ def css_for(palette: Palette) -> str:
         .foot-note, .foot-progress, .foot-reconnect {{
             color: {palette.muted};
         }}
+        .undo-note {{
+            margin-end: 4px;
+        }}
+        button.undo-link {{
+            background: transparent;
+            color: {palette.accent};
+            border: none;
+            box-shadow: none;
+            min-height: 0;
+            padding: 0 2px;
+        }}
+        button.undo-link:hover {{
+            color: {palette.fg};
+            background: transparent;
+        }}
         .foot-error, .foot-offline, .foot-session {{
             color: {palette.peak};
         }}
@@ -667,6 +682,28 @@ def css_for(palette: Palette) -> str:
             color: {palette.accent};
             box-shadow: inset 5px 0 0 {palette.peak};
         }}
+        list:drop(active), row:drop(active) {{
+            box-shadow: none;
+            outline: none;
+        }}
+        row.drop-above {{
+            box-shadow: inset 0 2px 0 {palette.accent};
+        }}
+        row.drop-below {{
+            box-shadow: inset 0 -2px 0 {palette.accent};
+        }}
+        row.current-track.drop-above {{
+            box-shadow: inset 5px 0 0 {palette.accent}, inset 0 2px 0 {palette.accent};
+        }}
+        row.current-track.drop-below {{
+            box-shadow: inset 5px 0 0 {palette.accent}, inset 0 -2px 0 {palette.accent};
+        }}
+        row.current-track.drop-above:selected {{
+            box-shadow: inset 5px 0 0 {palette.peak}, inset 0 2px 0 {palette.accent};
+        }}
+        row.current-track.drop-below:selected {{
+            box-shadow: inset 5px 0 0 {palette.peak}, inset 0 -2px 0 {palette.accent};
+        }}
         entry {{
             background: {palette.bg};
             color: {palette.fg};
@@ -694,6 +731,11 @@ def css_for(palette: Palette) -> str:
             padding: 3px 10px;
             border: none;
             border-radius: 2px;
+        }}
+        .ctx-menu separator.ctx-rule {{
+            background: {mix_hex(palette.panel, palette.muted, 0.35)};
+            min-height: 1px;
+            margin: 3px 8px;
         }}
         .ctx-menu button:hover {{
             background: {palette.highlight};
