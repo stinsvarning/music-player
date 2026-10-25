@@ -13,11 +13,15 @@ from .models import (
     PlaylistInfo,
     Track,
     default_queue_playlist_name,
+    album_query,
+    artist_query,
     format_time,
+    menu_sections,
     moved_index,
     play_next_target,
     queue_needs_rebuild,
     song_menu_actions,
+    track_link,
 )
 
 
@@ -157,27 +161,42 @@ class QueueViewMixin:
 
         idx = row.get_index() if source == "queue" else -1
         current = self.status.index if source == "queue" else -1
-        for label in song_menu_actions(source, row=idx, current=current, total=len(self._queue)):
-            if label == "Play next" and source == "queue":
-                box.append(self._menu_button(label, lambda: run(lambda: self._move_queue_row(row.get_index(), play_next_target(row.get_index(), self.status.index)))))
-            elif label == "Move to top":
-                box.append(self._menu_button(label, lambda: run(lambda: self._move_queue_row(row.get_index(), 0))))
-            elif label == "Move to bottom":
-                box.append(self._menu_button(label, lambda: run(lambda: self._move_queue_row(row.get_index(), len(self._queue) - 1))))
-            elif label == "Start mix":
-                box.append(self._menu_button(label, lambda: run(lambda: self._start_mix(track))))
-            elif label == "Play next":
-                box.append(self._menu_button(label, lambda: run(lambda: self._play_next(track))))
-            elif label == "Add to queue":
-                box.append(self._menu_button(label, lambda: run(lambda: self._add_to_queue(track))))
-            elif label == "Save this track…":
-                box.append(self._menu_button(label, lambda: self._show_save_menu(pop, row, track, source)))
-            elif label == "Save entire queue…":
-                box.append(self._menu_button(label, lambda: self._show_save_queue_menu(pop, row, track, source)))
-            elif label == "Remove":
-                box.append(self._menu_button(label, lambda: run(lambda: self._remove_from_queue(row.get_index()))))
-            elif label == "Clear upcoming":
-                box.append(self._menu_button(label, lambda: run(self._clear_upcoming)))
+        actions = song_menu_actions(
+            source,
+            row=idx,
+            current=current,
+            total=len(self._queue),
+            artist=bool(artist_query(track)),
+            album=bool(album_query(track)),
+        )
+        handlers = {
+            "Move to top": lambda: run(lambda: self._move_queue_row(row.get_index(), 0)),
+            "Move to bottom": lambda: run(lambda: self._move_queue_row(row.get_index(), len(self._queue) - 1)),
+            "Start mix": lambda: run(lambda: self._start_mix(track)),
+            "Add to queue": lambda: run(lambda: self._add_to_queue(track)),
+            "Go to artist": lambda: run(lambda: self._search_library(artist_query(track))),
+            "Go to album": lambda: run(lambda: self._search_library(album_query(track))),
+            "Save this track…": lambda: self._show_save_menu(pop, row, track, source),
+            "Save entire queue…": lambda: self._show_save_queue_menu(pop, row, track, source),
+            "Copy link": lambda: run(lambda: self._copy_link(track)),
+            "Remove": lambda: run(lambda: self._remove_from_queue(row.get_index())),
+            "Clear upcoming": lambda: run(self._clear_upcoming),
+        }
+        if source == "queue":
+            handlers["Play next"] = lambda: run(
+                lambda: self._move_queue_row(row.get_index(), play_next_target(row.get_index(), self.status.index))
+            )
+        else:
+            handlers["Play next"] = lambda: run(lambda: self._play_next(track))
+        for n, section in enumerate(menu_sections(actions)):
+            if n:
+                rule = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+                rule.add_css_class("ctx-rule")
+                box.append(rule)
+            for label in section:
+                fn = handlers.get(label)
+                if fn is not None:
+                    box.append(self._menu_button(label, fn))
         pop.set_child(box)
 
     def _popup_song_menu(self, row: Gtk.ListBoxRow, track: Track, source: str) -> None:
@@ -267,6 +286,19 @@ class QueueViewMixin:
 
     def _add_to_queue(self, track: Track) -> None:
         self._queue_cmd({"cmd": "track.queue", "track": track.to_ipc()})
+
+    def _search_library(self, query: str) -> None:
+        """Go to artist / album: a Library search for it (the engine has no browse ids)."""
+        if not query:
+            return
+        self._show_library()
+        self.search_entry.set_text(query)
+        self._on_search()
+
+    def _copy_link(self, track: Track) -> None:
+        link = track_link(track.id)
+        self.get_clipboard().set_content(Gdk.ContentProvider.new_for_value(link))
+        self._set_footer("link copied")
 
     def _clear_upcoming(self) -> None:
         self._queue_cmd({"cmd": "queue.clear_upcoming"})

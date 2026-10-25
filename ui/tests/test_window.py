@@ -479,6 +479,61 @@ class WindowChromeTests(unittest.TestCase):
         if focus is not None:
             self.assertTrue(self.win._queue_has_focus())
 
+    def test_copy_link_puts_the_music_link_on_the_clipboard(self):
+        from music_player.models import Track
+
+        track = Track(id="RE_XX6jk2Lo", title="Beyond", artist="Daft Punk")
+        self.win._copy_link(track)
+        clip = self.win.get_clipboard()
+        self.assertTrue(clip.is_local())
+        got = []
+        clip.read_text_async(None, lambda c, res: got.append(c.read_text_finish(res)))
+        ctx = GLib.MainContext.default()
+        deadline = time.monotonic() + 2
+        while not got and time.monotonic() < deadline:
+            ctx.iteration(False)
+            time.sleep(0.01)
+        self.assertEqual(got, ["https://music.youtube.com/watch?v=RE_XX6jk2Lo"])
+        self.assertEqual(self.win.status_label.get_text(), "link copied")
+
+    def test_go_to_artist_and_album_search_the_library(self):
+        from music_player.models import Track
+
+        track = Track(id="v", title="Voyager", artist="Daft Punk", album="Discovery")
+        self.win._queue = [track]
+        self.win._render_queue([track], 0)
+        sent = []
+        self.win.ipc.request = lambda payload, **_k: sent.append(payload) or {"ok": True, "tracks": []}
+        self.win._popup_song_menu(self.win.queue_list.get_row_at_index(0), track, "queue")
+        self._click_menu("Go to artist")
+        self.assertEqual(self.win.body_stack.get_visible_child_name(), "library")
+        self.assertEqual(self.win.search_entry.get_text(), "Daft Punk")
+        self.win._popup_song_menu(self.win.queue_list.get_row_at_index(0), track, "queue")
+        self._click_menu("Go to album")
+        self.assertEqual(self.win.search_entry.get_text(), "Discovery Daft Punk")
+        ctx = GLib.MainContext.default()
+        deadline = time.monotonic() + 2
+        while len(sent) < 2 and time.monotonic() < deadline:
+            ctx.iteration(False)
+            time.sleep(0.01)
+        self.assertIn({"cmd": "search", "query": "Discovery Daft Punk"}, sent)
+
+    def test_song_menus_have_thin_rules_between_sections(self):
+        tracks = self._queue_of(4, current=0)
+        self.win._popup_song_menu(self.win.queue_list.get_row_at_index(2), tracks[2], "queue")
+        rules = []
+        stack = [self.win._ctx_pop]
+        while stack:
+            w = stack.pop()
+            if isinstance(w, Gtk.Separator):
+                rules.append(w)
+            c = w.get_first_child()
+            while c is not None:
+                stack.append(c)
+                c = c.get_next_sibling()
+        self.assertEqual(len(rules), 3)
+        self.assertTrue(all(r.has_css_class("ctx-rule") for r in rules))
+
     def test_key_card_lists_queue_moves(self):
         from music_player.keys import HELP_LINES
 

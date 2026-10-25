@@ -188,11 +188,21 @@ def default_queue_playlist_name(when: date | None = None) -> str:
     return f"Queue {day.isoformat()}"
 
 
-def song_menu_actions(source: str, *, row: int = -1, current: int = -1, total: int = 0) -> list[str]:
+def song_menu_actions(
+    source: str,
+    *,
+    row: int = -1,
+    current: int = -1,
+    total: int = 0,
+    artist: bool = True,
+    album: bool = True,
+) -> list[str]:
     """Menu labels for a track row. Queue rows get move actions that make sense
-    for where the row sits (`row`) relative to the playing one (`current`)."""
+    for where the row sits (`row`) relative to the playing one (`current`);
+    Go to artist/album only show when the track names one."""
+    go = (["Go to artist"] if artist else []) + (["Go to album"] if album else [])
     if source != "queue":
-        return ["Play next", "Add to queue", "Start mix", "Save this track…"]
+        return ["Play next", "Add to queue", "Start mix", *go, "Save this track…", "Copy link"]
     actions = []
     if row < 0 or (row != current and row != current + 1):
         actions.append("Play next")
@@ -200,10 +210,53 @@ def song_menu_actions(source: str, *, row: int = -1, current: int = -1, total: i
         actions.append("Move to top")
     if row < 0 or row != total - 1:
         actions.append("Move to bottom")
-    actions.extend(["Start mix", "Save this track…", "Save entire queue…", "Remove"])
+    actions.extend(["Start mix", *go, "Save this track…", "Save entire queue…", "Copy link", "Remove"])
     if row < 0 or current + 1 < total:
         actions.append("Clear upcoming")
     return actions
+
+
+# Song menu sections; a thin rule sits between them.
+_MENU_GROUP = {
+    "Play next": 0,
+    "Add to queue": 0,
+    "Move to top": 0,
+    "Move to bottom": 0,
+    "Start mix": 1,
+    "Go to artist": 1,
+    "Go to album": 1,
+    "Save this track…": 2,
+    "Save entire queue…": 2,
+    "Copy link": 2,
+    "Remove": 3,
+    "Clear upcoming": 3,
+}
+
+
+def menu_sections(actions: list[str]) -> list[list[str]]:
+    out: list[list[str]] = []
+    last = None
+    for label in actions:
+        group = _MENU_GROUP.get(label, 9)
+        if group != last:
+            out.append([])
+            last = group
+        out[-1].append(label)
+    return out
+
+
+def track_link(track_id: str) -> str:
+    return f"https://music.youtube.com/watch?v={track_id}"
+
+
+def artist_query(track: "Track") -> str:
+    return (track.artist or "").strip()
+
+
+def album_query(track: "Track") -> str:
+    album = (track.album or "").strip()
+    artist = (track.artist or "").strip()
+    return f"{album} {artist}".strip() if album else ""
 
 
 # Footer note after an undoable queue edit, keyed by the engine command.

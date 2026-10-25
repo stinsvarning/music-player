@@ -728,6 +728,11 @@ def css_for(palette: Palette) -> str:
             border: none;
             border-radius: 2px;
         }}
+        .ctx-menu separator.ctx-rule {{
+            background: {mix_hex(palette.panel, palette.muted, 0.35)};
+            min-height: 1px;
+            margin: 3px 8px;
+        }}
         .ctx-menu button:hover {{
             background: {palette.highlight};
         }}
