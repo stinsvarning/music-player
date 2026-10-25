@@ -11,7 +11,7 @@ gi.require_version("Gtk", "4.0")
 
 from gi.repository import Gio, GLib, GLibUnix, Gtk
 
-from .engine import EngineSupervisor
+from .engine import EngineSupervisor, service_unit
 from .ipc import EngineIPC
 from .window import PlayerWindow
 
@@ -20,6 +20,10 @@ def default_socket() -> Path:
     override = os.environ.get("MUSIC_PLAYER_SOCK")
     if override:
         return Path(override)
+    return standard_socket()
+
+
+def standard_socket() -> Path:
     return Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "music-player" / "engine.sock"
 
 
@@ -50,7 +54,12 @@ class MusicApplication(Gtk.Application):
         try:
             sock = default_socket()
             ipc = EngineIPC(sock)
-            self.supervisor = EngineSupervisor(binary=engine_entry(), socket_path=str(sock), ipc=ipc)
+            self.supervisor = EngineSupervisor(
+                binary=engine_entry(),
+                socket_path=str(sock),
+                ipc=ipc,
+                service=service_unit(sock, standard_socket()),
+            )
             self.window = PlayerWindow(self, ipc)
             self.window.connect("close-request", self._on_close)
             self.window.present()

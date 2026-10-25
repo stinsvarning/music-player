@@ -1,0 +1,25 @@
+# Music engine as a systemd user service. Installed by packaging/install-service.sh,
+# which fills in @NODE@ and @ENGINE@. The window attaches to this engine when it is
+# running and starts it with `systemctl --user start` when the unit is installed;
+# without the unit the window spawns the engine itself, as before.
+[Unit]
+Description=Music engine (YouTube Music via mpv)
+Documentation=https://github.com/stinsvarning/music-player
+# The session environment (WAYLAND_DISPLAY, D-Bus) is imported by then, so MPRIS
+# and "Raise" work; the engine stops with the graphical session.
+After=graphical-session.target pipewire.service pipewire-pulse.service
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=@NODE@ @ENGINE@
+# A second engine exits 0 right away (for example when the window already
+# spawned one), so only real failures restart.
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=10
+# The engine flushes the session and quits mpv on SIGTERM.
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=graphical-session.target
