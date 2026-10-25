@@ -61,6 +61,14 @@ if [ -x "$CTL" ] && command -v node >/dev/null 2>&1; then
   node "$CTL" shutdown >/dev/null 2>&1 || true
 fi
 
+UNIT_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/music-player-engine.service"
+if [ -f "$UNIT_FILE" ] && command -v systemctl >/dev/null 2>&1; then
+  systemctl --user disable --now music-player-engine.service >/dev/null 2>&1 || true
+  rm -f "$UNIT_FILE"
+  systemctl --user daemon-reload >/dev/null 2>&1 || true
+  echo "Removed the music-player-engine user service"
+fi
+
 rm -f "$BINDIR/music-player"
 rm -f "$APPDIR/music-player.desktop"
 rm -rf "$DEST"

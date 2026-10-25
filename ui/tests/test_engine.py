@@ -159,3 +159,58 @@ class EngineSupervisorTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ServiceTests(unittest.TestCase):
+    def _unit_home(self, tmp):
+        unit_dir = Path(tmp) / "systemd" / "user"
+        unit_dir.mkdir(parents=True)
+        (unit_dir / "music-player-engine.service").write_text("[Service]\n")
+        return {"XDG_CONFIG_HOME": tmp}
+
+    def test_unit_is_used_only_when_installed_and_on_the_default_socket(self):
+        from music_player.engine import service_unit
+
+        with tempfile.TemporaryDirectory() as tmp, patch("shutil.which", return_value="/usr/bin/systemctl"):
+            sock = Path(tmp) / "music-player" / "engine.sock"
+            self.assertIsNone(service_unit(sock, sock, {"XDG_CONFIG_HOME": tmp}))
+            env = self._unit_home(tmp)
+            with patch("music_player.engine.Path.is_file", lambda p: str(p).startswith(tmp) and p.name.endswith(".service") and os.path.isfile(p)):
+                self.assertEqual(service_unit(sock, sock, env), "music-player-engine.service")
+                self.assertIsNone(service_unit(Path(tmp) / "other.sock", sock, env))
+                self.assertIsNone(service_unit(sock, sock, {**env, "MUSIC_PLAYER_NO_SYSTEMD": "1"}))
+
+    def _sup(self, tmp, ipc, calls, rc=0, active="active"):
+        def systemctl(*args, timeout=8.0):
+            calls.append(args)
+            out = active if args[0] == "is-active" else ""
+            return subprocess.CompletedProcess(["systemctl", *args], rc, stdout=out, stderr="")
+
+        sock = Path(tmp) / "engine.sock"
+        return EngineSupervisor(binary="node", socket_path=str(sock), ipc=ipc, service="music-player-engine.service", systemctl=systemctl)
+
+    def test_service_start_is_preferred_over_spawning(self):
+        class LateIpc:
+            n = 0
+
+            def alive(self):
+                self.n += 1
+                return self.n > 2  # not up at first, then the service brings it up
+
+        calls = []
+        with tempfile.TemporaryDirectory() as tmp, patch("subprocess.Popen") as popen:
+            sup = self._sup(tmp, LateIpc(), calls)
+            self.assertTrue(sup.ensure(timeout=3))
+            popen.assert_not_called()
+        self.assertEqual(calls[0], ("start", "music-player-engine.service"))
+        self.assertTrue(sup.via_service)
+        self.assertFalse(sup.owned)
+
+    def test_failed_service_falls_back_to_spawning(self):
+        calls = []
+        with tempfile.TemporaryDirectory() as tmp:
+            sup = self._sup(tmp, FakeIpc(alive=False), calls, rc=0, active="failed")
+            self.assertFalse(sup._start_service(2.0))
+            sup2 = self._sup(tmp, FakeIpc(alive=False), calls, rc=5)
+            self.assertFalse(sup2._start_service(2.0))
+        self.assertIn(("is-active", "music-player-engine.service"), calls)

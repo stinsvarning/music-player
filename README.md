@@ -102,6 +102,25 @@ cookies_from = "auto"
 | Ctrl+Q | Quits the engine and mpv. |
 | Open Music again | Attaches to the running engine if it is still up. |
 
+### Engine as a systemd user service (optional)
+
+The engine can run as a user service, so it starts with your desktop session and the
+bar widget and media keys work before the window is ever opened:
+
+```bash
+./packaging/install-service.sh --enable --now           # engine installed by install.sh (~/.local)
+./packaging/install-service.sh --repo --enable --now    # or the engine in this checkout
+```
+
+- With the unit installed, opening Music runs `systemctl --user start music-player-engine.service`
+  and attaches to it. If that fails, the window spawns the engine itself, as without the service.
+- Ctrl+Q still quits the engine; the service stays stopped (it only restarts after a crash) until
+  the next login or the next time you open Music.
+- If an engine is already running when the service starts, the service exits quietly and the
+  running engine keeps playing.
+- `MUSIC_PLAYER_NO_SYSTEMD=1 music-player` skips the service for one launch.
+- Logs: `journalctl --user -u music-player-engine`. Remove it with `./packaging/install-service.sh --remove`.
+
 ## Uninstall
 
 Quit the player first (**Ctrl+Q**).
@@ -110,7 +129,7 @@ Quit the player first (**Ctrl+Q**).
 ./packaging/uninstall.sh --prefix ~/.local
 ```
 
-That removes the binary, library tree, and desktop entry. Session and cookies stay.
+That removes the binary, library tree, desktop entry, and the engine user service if installed. Session and cookies stay.
 
 ```bash
 ./packaging/uninstall.sh --purge-extras    # also drop the bar plugin and Hyprland snippet

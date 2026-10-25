@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import signal
 import subprocess
 import threading
@@ -9,14 +10,44 @@ from pathlib import Path
 
 from .ipc import EngineIPC
 
+SERVICE_UNIT = "music-player-engine.service"
+
+
+def service_unit(socket_path: str | Path, default_socket: str | Path, env: dict | None = None) -> str | None:
+    """The systemd user unit to start the engine with, or None to spawn it directly.
+
+    Only when the unit is installed, systemctl exists, the window uses the default
+    socket (the unit does), and MUSIC_PLAYER_NO_SYSTEMD is not set.
+    """
+    env = os.environ if env is None else env
+    if str(env.get("MUSIC_PLAYER_NO_SYSTEMD", "")).lower() in {"1", "true", "yes"}:
+        return None
+    if Path(socket_path) != Path(default_socket) or not shutil.which("systemctl"):
+        return None
+    config = Path(env.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+    for base in (config / "systemd" / "user", Path("/etc/systemd/user"), Path("/usr/lib/systemd/user")):
+        if (base / SERVICE_UNIT).is_file():
+            return SERVICE_UNIT
+    return None
+
+
+def _systemctl(*args: str, timeout: float = 8.0) -> subprocess.CompletedProcess[str] | None:
+    try:
+        return subprocess.run(["systemctl", "--user", *args], capture_output=True, text=True, timeout=timeout, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+
 
 class EngineSupervisor:
-    def __init__(self, *, binary: str, socket_path: str, ipc: EngineIPC):
+    def __init__(self, *, binary: str, socket_path: str, ipc: EngineIPC, service: str | None = None, systemctl=None):
         self.binary = binary
         self.socket_path = socket_path
         self.ipc = ipc
+        self.service = service  # systemd user unit to try before spawning
+        self._systemctl = systemctl or _systemctl
         self.proc: subprocess.Popen[bytes] | None = None
         self.owned = False
+        self.via_service = False
         self._stderr_tail: list[bytes] = []
 
     def ensure(self, timeout: float = 20.0) -> bool:
@@ -25,6 +56,8 @@ class EngineSupervisor:
             return True
         if self._existing_engine_pid():
             return self._wait_ready(timeout)
+        if self.service and self._start_service(min(timeout, 12.0)):
+            return True
         self._clear_stale()
         env = os.environ.copy()
         env["MUSIC_PLAYER_SOCK"] = str(self.socket_path)
@@ -49,6 +82,23 @@ class EngineSupervisor:
             time.sleep(0.1)
         detail = self.stderr_text()
         raise TimeoutError(detail or "engine did not become ready")
+
+    def _start_service(self, timeout: float) -> bool:
+        """Start the engine through systemd; False means fall back to spawning it."""
+        started = self._systemctl("start", self.service)
+        if started is None or started.returncode != 0:
+            return False
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if self.ipc.alive():
+                self.owned = False
+                self.via_service = True
+                return True
+            state = self._systemctl("is-active", self.service, timeout=3.0)
+            if state is not None and state.stdout.strip() in {"failed", "inactive"} and not self._existing_engine_pid():
+                return False
+            time.sleep(0.2)
+        return False
 
     def _read_stderr(self) -> None:
         proc = self.proc
