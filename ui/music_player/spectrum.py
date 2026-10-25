@@ -57,7 +57,30 @@ FIELD_SLOW_RELEASE = 0.95
 FIELD_DRIFT_EVERY = 2  # band updates per field-waterfall ring step
 FIELD_KEEP = 200
 
+# Field punch: bricks columns and the wave glow use the strip's trick (expand the
+# calm level around a pivot and add each hit) so they climb and pulse with the beat.
+# Bricks columns follow each band against its own recent level (so a bass-light
+# track still climbs) with each hit kicked on top.
+FIELD_BRICK_BASE = 0.36
+FIELD_BRICK_RANGE = 1.6
+FIELD_BRICK_KICK = 1.2
+FIELD_BRICK_MEAN_TAU = 2.5
+FIELD_BRICK_TALL = 0.45  # column height at full level, as a share of the screen height
+FIELD_WAVE_PIVOT = 0.30
+FIELD_WAVE_RANGE = 1.8
+FIELD_WAVE_KICK = 0.9
+FIELD_WAVE_ATTACK = 0.05
+FIELD_WAVE_RELEASE = 0.30
+
 QUIET_GATE = 0.06
+
+# Volume: the app's slider (0-100) scales every look. A perceptual curve with a
+# floor keeps the visuals readable at low volume.
+VOLUME_FLOOR = 0.25
+VOLUME_CURVE = 0.7
+
+# Redraw cap for the per-frame strip animation, whatever the monitor's refresh.
+MAX_FPS = 60.0
 
 # The engine reports per-band RMS over 80 ms, mapped from -70..0 dB to 0..1.
 # Measured on real (loud, compressed) music the bands sit at 0.45-0.8 and move
@@ -78,6 +101,51 @@ DYN_LOUD_SPAN = 0.36  # ... and how much more is full loudness
 
 
 # ---------------------------------------------------------------- modes
+
+
+def volume_intensity(volume: float | None) -> float:
+    """0-100 volume -> 0.25..1 visual intensity (1 at full volume)."""
+    if volume is None:
+        return 1.0
+    try:
+        v = clamp01(float(volume) / 100.0)
+    except (TypeError, ValueError):
+        return 1.0
+    return VOLUME_FLOOR + (1.0 - VOLUME_FLOOR) * v**VOLUME_CURVE
+
+
+def expand(value: float, event: float, pivot: float, span: float, kick: float) -> float:
+    """Stretch a calm level around `pivot` and add a share of the hit on top."""
+    if value <= 0:
+        return 0.0
+    return clamp01(pivot + (value - pivot) * span + kick * event)
+
+
+class FramePacer:
+    """Caps per-frame work at `fps` on any refresh rate, without drifting.
+
+    `step(dt)` takes the frame-clock delta and returns the time to advance by
+    when this frame should draw, or None to skip it.
+    """
+
+    def __init__(self, fps: float = MAX_FPS) -> None:
+        self.period = 1.0 / fps
+        self.credit = 0.0
+        self.elapsed = 0.0
+
+    def step(self, dt: float) -> float | None:
+        dt = max(0.0, float(dt))
+        self.credit += dt
+        self.elapsed += dt
+        if self.credit + 0.0015 < self.period:  # small slack for clock jitter
+            return None
+        self.credit = min(self.period, self.credit - self.period)  # may dip below 0 by the slack, so it averages out
+        out, self.elapsed = self.elapsed, 0.0
+        return out
+
+    def reset(self) -> None:
+        self.credit = self.period  # draw the first frame after waking
+        self.elapsed = 0.0
 
 
 def normalize_vis(mode: object) -> str:
@@ -380,12 +448,12 @@ def field_spec(
         swell = gate(bass_of(bands), 0.04, 1.1)
         if swell <= 0 or reach <= 0:
             return 0.0  # dark at rest
-        line = 0.12 * reach * min(1.0, swell * 4.0) if d < cell * 0.5 else 0.0
+        line = 0.16 * reach * min(1.0, swell * 4.0) if d < cell * 0.5 else 0.0
         undulate = 0.9 + 0.1 * math.sin(t * 0.5 + side * 2.2)
-        thick = cell * 0.5 + swell * reach * height * 0.30 * undulate
+        thick = cell * 0.5 + swell * reach * height * 0.36 * undulate
         if d >= thick:
             return line
-        glow = (0.45 + 0.55 * swell) * (0.4 + 0.6 * reach) * (1.0 - d / thick) ** 1.2
+        glow = min(1.0, (0.55 + 0.75 * swell) * (0.45 + 0.55 * reach)) * (1.0 - d / thick) ** 0.9
         return max(line, glow)
     if mode == "waterfall":
         if not history:
@@ -404,9 +472,9 @@ def field_spec(
     if level <= 0:
         return 0.0
     up = (height - cy) / cell
-    tall = level * (height / cell) * 0.62
+    tall = level * (height / cell) * FIELD_BRICK_TALL
     if 0 <= up < tall:
-        return level * (1 - up / tall) ** 0.85
+        return min(1.0, level * (0.45 + 0.55 * (1 - up / tall) ** 0.7) * 1.25)
     return 0.0
 
 
@@ -484,20 +552,19 @@ class LcdState:
         self.history: deque = deque(maxlen=WATERFALL_KEEP)
         self._wf = [0.0] * BAND_COUNT
         self.serial = 0  # bumps on every band update
+        self.intensity = 1.0  # from the volume slider, see volume_intensity
         self._dyn = Dynamics()
+
+    def set_volume(self, volume: float | None) -> None:
+        self.intensity = volume_intensity(volume)
 
     def set_bands(self, bands: list[float] | None, dt: float = BAND_INTERVAL) -> None:
         self.target, events = self._dyn.apply(bands, dt)
-        self.punch = [
-            clamp01(BRICK_PIVOT + (v - BRICK_PIVOT) * BRICK_RANGE + BRICK_KICK * e) if v > 0 else 0.0
-            for v, e in zip(self.target, events)
-        ]
-        self.wave_target = [
-            clamp01(WAVE_PIVOT + (v - WAVE_PIVOT) * WAVE_RANGE + WAVE_KICK * e) if v > 0 else 0.0
-            for v, e in zip(self.target, events)
-        ]
+        k = self.intensity
+        self.punch = [k * expand(v, e, BRICK_PIVOT, BRICK_RANGE, BRICK_KICK) for v, e in zip(self.target, events)]
+        self.wave_target = [k * expand(v, e, WAVE_PIVOT, WAVE_RANGE, WAVE_KICK) for v, e in zip(self.target, events)]
         self.trail.appendleft((list(self.wave), self.phase, self.energy))
-        self._wf = ease_levels(self._wf, events, dt, 0.02, 0.12)
+        self._wf = ease_levels(self._wf, [k * e for e in events], dt, 0.02, 0.12)
         self.history.append(list(self._wf))
         self.serial += 1
 
@@ -506,7 +573,7 @@ class LcdState:
         dt = max(0.0, min(0.25, float(dt)))
         self.level = ease_levels(self.level, self.punch, dt, BRICK_ATTACK, BRICK_RELEASE)
         self.wave = ease_levels(self.wave, self.wave_target, dt, WAVE_ATTACK, WAVE_RELEASE)
-        mean = sum(self.target) / BAND_COUNT
+        mean = self.intensity * sum(self.target) / BAND_COUNT
         self.energy = ease_levels([self.energy], [mean], dt, 0.08, 0.6)[0]
         self.phase = (self.phase + WAVE_TRAVEL * dt) % math.tau
         self.bars = interpolate_bars(self.level, BRICK_COLS)
@@ -530,12 +597,35 @@ class FieldState:
         self._tick = 0
         self._dyn = Dynamics()
         self._events = [0.0] * BAND_COUNT
+        self.bricks = [0.0] * BAND_COUNT  # level against its own norm, kicked by hits
+        self._brick_mean: list[float] | None = None
+        self.wave = [0.0] * BAND_COUNT  # quicker, punchier swell for the wave glow
+        self.intensity = 1.0
+
+    def set_volume(self, volume: float | None) -> None:
+        self.intensity = volume_intensity(volume)
 
     def set_bands(self, bands: list[float] | None, dt: float = BAND_INTERVAL) -> None:
         vals, events = self._dyn.apply(bands, dt)
+        k = self.intensity
+        vals = [k * v for v in vals]
+        events = [k * e for e in events]
         self._events = ease_levels(self._events, events, dt, FIELD_ATTACK, FIELD_RELEASE)
         self.level = ease_levels(self.level, vals, dt, FIELD_ATTACK, FIELD_RELEASE)
         self.slow = ease_levels(self.slow, vals, dt, FIELD_SLOW_ATTACK, FIELD_SLOW_RELEASE)
+        raw = [v / k for v in self.level]
+        if self._brick_mean is None:
+            self._brick_mean = list(raw)
+        self._brick_mean = ease_levels(self._brick_mean, raw, dt, FIELD_BRICK_MEAN_TAU, FIELD_BRICK_MEAN_TAU)
+        self.bricks = [
+            k * clamp01(FIELD_BRICK_BASE + (v - m) * FIELD_BRICK_RANGE + FIELD_BRICK_KICK * e / k) if v > 1e-3 else 0.0
+            for v, m, e in zip(raw, self._brick_mean, self._events)
+        ]
+        swell = [
+            k * expand(v / k if k else 0.0, e / k if k else 0.0, FIELD_WAVE_PIVOT, FIELD_WAVE_RANGE, FIELD_WAVE_KICK)
+            for v, e in zip(vals, events)
+        ]
+        self.wave = ease_levels(self.wave, swell, dt, FIELD_WAVE_ATTACK, FIELD_WAVE_RELEASE)
         mean = sum(vals) / float(BAND_COUNT)
         self.amp = self.amp * 0.9 + mean * 0.1
         self._tick += 1
@@ -543,4 +633,8 @@ class FieldState:
             self.history.append(list(self._events))
 
     def bands_for(self, mode: str) -> list[float]:
-        return self.slow if mode == "wave" else self.level
+        if mode == "wave":
+            return self.wave
+        if mode == "bricks":
+            return self.bricks
+        return self.level

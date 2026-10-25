@@ -354,20 +354,19 @@ def paint_field(
         row_dy.append(max(deck_t - cy, 0.0, cy - deck_b) if deck_b > deck_t else 0.0)
 
     def grid(g: cairo.Context) -> None:
+        # One uniform dark everywhere: the faint cells run right up to the deck
+        # (which covers them), so there is no darker halo around it.
         g.set_source_rgb(*bg)
         g.paint()
         if FIELD_GRID_ALPHA <= 0:
             return
-        for ri, row in enumerate(range(-1, rows)):
-            for ci, col in enumerate(range(-1, cols)):
-                shade = field_clearance(col_dx[ci], row_dy[ri])
-                if shade < 0.05:
-                    continue
-                g.set_source_rgba(*accent, FIELD_GRID_ALPHA * shade)
+        g.set_source_rgba(*accent, FIELD_GRID_ALPHA)
+        for row in range(-1, rows):
+            for col in range(-1, cols):
                 g.rectangle(round(col * cell), round(row * cell), side, side)
-                g.fill()
+        g.fill()
 
-    _cached_grid(cr, ("field", bg, accent, round(deck_l), round(deck_t), round(deck_r), round(deck_b)), width, height, grid)
+    _cached_grid(cr, ("field", bg, accent, round(cell, 3)), width, height, grid)
 
     dim = rgb(mix_hex(palette.bg, palette.accent, 0.28))
     mid = rgb(mix_hex(palette.bg, palette.accent, 0.55))
@@ -406,7 +405,7 @@ def paint_field(
             threshold = 0.78 * ((BAYER[(row & 7) * 8 + (col & 7)] + 0.5) / 64) + 0.22 * j
             if energy <= threshold:
                 continue
-            heat = spec * 0.6
+            heat = spec * (0.66 if mode in ("bricks", "wave") else 0.6)
             color = lit if heat > 0.34 else mid if heat > 0.1 else dim
             buckets[color].append((round(x), round(y), side, side))
     _fill_buckets(cr, buckets)

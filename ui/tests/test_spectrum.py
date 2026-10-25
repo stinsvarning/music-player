@@ -10,6 +10,7 @@ from music_player.spectrum import (
     VIS_MODES,
     WATERFALL_STEPS,
     Dynamics,
+    FramePacer,
     FieldState,
     LcdState,
     band_at_height,
@@ -33,6 +34,7 @@ from music_player.spectrum import (
     waterfall_step,
     wave_heights,
     wave_row,
+    volume_intensity,
 )
 from music_player.widgets.vis_paint import paint_field, paint_lcd
 from music_player.prefs import load_vis_mode, save_vis_mode
@@ -307,8 +309,9 @@ class StateTests(unittest.TestCase):
         for _ in range(10):
             state.set_bands([0.6] * 10)
         self.assertEqual(len(state.history), 6)  # the first update seeds it, then every 2nd
-        self.assertIs(state.bands_for("wave"), state.slow)
-        self.assertIs(state.bands_for("bricks"), state.level)
+        self.assertIs(state.bands_for("wave"), state.wave)
+        self.assertIs(state.bands_for("bricks"), state.bricks)
+        self.assertIs(state.bands_for("waterfall"), state.level)
 
 
 class LivelierTests(unittest.TestCase):
@@ -385,3 +388,120 @@ class HitTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VolumeTests(unittest.TestCase):
+    def test_volume_curve_has_a_floor_and_is_full_at_100(self):
+        self.assertAlmostEqual(volume_intensity(100), 1.0)
+        self.assertAlmostEqual(volume_intensity(0), 0.25)
+        self.assertAlmostEqual(volume_intensity(50), 0.25 + 0.75 * 0.5**0.7)
+        self.assertAlmostEqual(volume_intensity(None), 1.0)
+        self.assertAlmostEqual(volume_intensity(250), 1.0)
+        self.assertAlmostEqual(volume_intensity(-5), 0.25)
+        steps = [volume_intensity(v) for v in range(0, 101, 10)]
+        self.assertEqual(steps, sorted(steps))
+        self.assertGreater(volume_intensity(20), 0.25 + 0.75 * 0.2)  # perceptual: low volumes stay visible
+
+    def _strip(self, volume):
+        state = LcdState()
+        state.set_volume(volume)
+        for i in range(60):
+            state.set_bands([0.7 + 0.1 * ((i + b) % 3 == 0) for b in range(10)])
+            state.advance(0.08)
+        return state
+
+    def test_strip_calms_with_volume(self):
+        full, low = self._strip(100), self._strip(10)
+        self.assertGreater(sum(full.punch), sum(low.punch) * 1.5)
+        self.assertGreater(sum(full.wave_target), sum(low.wave_target) * 1.5)
+        self.assertGreater(full.energy, low.energy * 1.5)
+        self.assertGreater(max(low.bars), 0.0)  # still visible at low volume
+
+    def test_field_calms_with_volume(self):
+        fields = {}
+        for vol in (100, 10):
+            f = FieldState()
+            f.set_volume(vol)
+            for i in range(60):
+                f.set_bands([0.7 + 0.1 * ((i + b) % 3 == 0) for b in range(10)])
+            fields[vol] = f
+        for attr in ("level", "bricks", "wave"):
+            self.assertGreater(sum(getattr(fields[100], attr)), sum(getattr(fields[10], attr)) * 1.5, attr)
+        self.assertGreater(sum(fields[10].bricks), 0.0)
+
+    def test_full_volume_matches_no_volume(self):
+        a, b = LcdState(), LcdState()
+        a.set_volume(100)
+        for i in range(20):
+            bands = [((i + k) % 7) / 7 for k in range(10)]
+            a.set_bands(bands)
+            b.set_bands(bands)
+        self.assertEqual(a.punch, b.punch)
+        self.assertEqual(list(a.history), list(b.history))
+
+
+class PacerTests(unittest.TestCase):
+    def _draws(self, hz, seconds=2.0):
+        pacer = FramePacer(60)
+        pacer.reset()
+        n, total = 0, 0.0
+        for _ in range(int(hz * seconds)):
+            step = pacer.step(1 / hz)
+            if step is not None:
+                n += 1
+                total += step
+        return n / seconds, total
+
+    def test_caps_at_60_on_fast_monitors(self):
+        for hz in (120, 144, 165, 240):
+            fps, total = self._draws(hz)
+            self.assertLessEqual(fps, 61, hz)
+            self.assertGreaterEqual(fps, 55, hz)
+            self.assertAlmostEqual(total, 2.0, delta=0.05)  # time is never lost
+
+    def test_60hz_and_slower_draw_every_frame(self):
+        self.assertAlmostEqual(self._draws(60)[0], 60, delta=1)
+        self.assertAlmostEqual(self._draws(30)[0], 30, delta=1)
+
+
+class FieldPunchTests(unittest.TestCase):
+    def test_bricks_field_climbs_on_hits(self):
+        f = FieldState()
+        for _ in range(60):
+            f.set_bands([0.6] * 10)
+        calm = f.bricks[0]
+        for _ in range(3):
+            f.set_bands([0.85] + [0.6] * 9)
+        self.assertGreater(f.bricks[0], calm + 0.25)
+        kw = dict(cx=20.0, mid_x=1000.0, mid_y=500.0, half=1000.0, height=1000.0, cell=20.0, t=0.0)
+        high = field_spec("bricks", cy=1000.0 - 20 * 12, bands=[0.9] * 10, **kw)
+        self.assertGreater(high, 0.2)  # a loud column reaches well above the floor
+
+    def test_wave_field_reacts_within_a_few_polls(self):
+        f = FieldState()
+        for _ in range(60):
+            f.set_bands([0.6] * 10)
+        calm = f.wave[0]
+        for _ in range(3):
+            f.set_bands([0.85, 0.85, 0.85] + [0.6] * 7)
+        self.assertGreater(f.wave[0], calm + 0.15)
+
+
+class HaloTests(unittest.TestCase):
+    def test_field_bg_is_uniform_around_the_deck(self):
+        field = FieldState()
+        for _ in range(10):
+            field.set_bands([0.0] * 10)
+        w, h, cell = 810, 400, 810 / 81
+        surf = cairo.ImageSurface(cairo.FORMAT_RGB24, w, h)
+        paint_field(cairo.Context(surf), w, h, (300, 120, 510, 280), "bricks", FALLBACK, field, 0.0)
+        data, stride = bytes(surf.get_data()), surf.get_stride()
+
+        def px(x, y):
+            o = int(y) * stride + int(x) * 4
+            return data[o : o + 3]
+
+        # cell centres just outside the deck vs far out in the corner: identical
+        near = {px(c * cell + cell / 2, 125) for c in range(31, 34)} | {px(29 * cell + cell / 2, r * cell + cell / 2) for r in (14, 20, 26)}
+        far = {px(c * cell + cell / 2, r * cell + cell / 2) for c in (1, 2) for r in (1, 2)}
+        self.assertEqual(len(near | far), 1, (near, far))

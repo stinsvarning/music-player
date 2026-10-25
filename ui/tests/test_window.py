@@ -224,6 +224,16 @@ class WindowChromeTests(unittest.TestCase):
         self.assertEqual(self.win.spectrum.mode, cycle_vis("wave"))
         self.assertEqual(self.win.field.mode, self.win.spectrum.mode)
 
+    def test_volume_scales_the_visualizers(self):
+        from music_player.spectrum import volume_intensity
+
+        self.win.volume.set_value(20)
+        self.assertAlmostEqual(self.win.spectrum.state.intensity, volume_intensity(20))
+        self.assertAlmostEqual(self.win.field.state.intensity, volume_intensity(20))
+        self.win._on_status({"ok": True, "state": "playing", "position": 0, "duration": 0, "volume": 100})
+        self.assertAlmostEqual(self.win.spectrum.state.intensity, 1.0)
+        self.assertAlmostEqual(self.win.field.state.intensity, 1.0)
+
     def test_hand_edited_vis_mode_applies_live(self):
         self._cfg.write_text('vis_mode = "orbit"\n')
         self.win._reload_config()

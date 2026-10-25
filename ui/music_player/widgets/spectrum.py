@@ -10,6 +10,7 @@ from gi.repository import Gtk
 from music_player.spectrum import (
     BRICK_COLS,
     VIS_MODES,
+    FramePacer,
     LcdState,
     bar_index_at,
     brick_columns,
@@ -34,6 +35,7 @@ class SpectrumView(Gtk.DrawingArea):
         self._hover = -1
         self._last_frame = 0
         self._awake = False
+        self._pacer = FramePacer()  # 60 fps cap, even on a 120 Hz monitor
         self.palette: Palette = palette_named("mint")
         self.set_draw_func(self._draw)
         self.set_cursor_from_name("pointer")
@@ -54,12 +56,16 @@ class SpectrumView(Gtk.DrawingArea):
         self.palette = palette
         self.queue_draw()
 
+    def set_volume(self, volume: float | None) -> None:
+        self.state.set_volume(volume)
+
     def set_bands(self, bands: list[float]) -> None:
         self.state.set_bands(bands)
         self._bands = list(self.state.target)
         self._cols = brick_columns(self._bands)
-        if any(v > 1e-3 for v in self._bands):
+        if any(v > 1e-3 for v in self._bands) and not self._awake:
             self._awake = True
+            self._pacer.reset()
         if self.mode == "waterfall":
             self.queue_draw()
 
@@ -69,7 +75,10 @@ class SpectrumView(Gtk.DrawingArea):
         self._last_frame = now
         if not self._awake:
             return True
-        active = self.state.advance(dt)
+        step = self._pacer.step(dt)
+        if step is None:
+            return True  # skip this refresh; the next one catches up the time
+        active = self.state.advance(step)
         if self.mode != "waterfall":
             self.queue_draw()
         if not active:

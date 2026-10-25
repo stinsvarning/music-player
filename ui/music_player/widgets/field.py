@@ -55,6 +55,9 @@ class FieldView(Gtk.DrawingArea):
         self.palette = palette
         self.queue_draw()
 
+    def set_volume(self, volume: float | None) -> None:
+        self.state.set_volume(volume)
+
     def set_bands(self, bands: list[float]) -> None:
         self.state.set_bands(bands)
         self.queue_draw()

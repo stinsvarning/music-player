@@ -866,6 +866,7 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
                 self.btn_sleep.set_tooltip_text("Sleep timer off")
             self.volume.set_value(st.volume)
             self.vol_num.set_text(str(int(st.volume)))
+            self._set_vis_volume(st.volume)
             self._set_account_tip(st.logged_in, st.auth_source)
             if st.track:
                 self.set_title(st.track.title or "Music")
@@ -926,7 +927,14 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         if self._syncing:
             return
         self.vol_num.set_text(str(int(scale.get_value())))
+        self._set_vis_volume(scale.get_value())
         self._queue_cmd({"cmd": "volume", "value": scale.get_value()})
+
+    def _set_vis_volume(self, volume: float) -> None:
+        """The visualizers calm down and dim with the volume slider."""
+        self.spectrum.set_volume(volume)
+        if getattr(self, "field", None) is not None:
+            self.field.set_volume(volume)
 
     def _on_shuffle(self, btn: Gtk.ToggleButton) -> None:
         if self._syncing:
