@@ -13,7 +13,18 @@ gi.require_version("Gdk", "4.0")
 from gi.repository import Gdk, Gio, GLib, GObject, Gtk
 
 from .ipc import EngineError, EngineIPC, lane_for
-from .layout import bind_ellipsize, caption_bar, clear_list, constrain_scroll, make_row
+from .layout import (
+    DECK_FRAME,
+    DECK_H,
+    DECK_MARGIN,
+    DECK_W,
+    bind_ellipsize,
+    caption_bar,
+    clear_list,
+    constrain_scroll,
+    fit_deck,
+    make_row,
+)
 from .prefs import config_path, load_vis_mode, save_vis_mode
 from .spectrum import cycle_vis
 from .library import LibraryMixin
@@ -65,8 +76,6 @@ HELP_LINES = (
 )
 WINDOW_W = 1180
 WINDOW_H = 880
-DECK_W = 1180
-DECK_H = 800
 _ICON_MARK = {
     "media-skip-backward-symbolic": ("go-previous-symbolic", "PREV"),
     "media-skip-forward-symbolic": ("go-next-symbolic", "NEXT"),
@@ -173,7 +182,7 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         stage.set_child(self.field)
         deck = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         deck.add_css_class("deck")
-        deck.set_size_request(DECK_W, DECK_H)
+        deck.set_size_request(DECK_W + DECK_FRAME, DECK_H + DECK_FRAME)
         deck.set_hexpand(False)
         deck.set_vexpand(False)
         deck.set_halign(Gtk.Align.CENTER)
@@ -186,11 +195,46 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         deck.append(self.body_box)
         deck.append(self._footer())
         self.deck = deck
+        self.deck_fit = fit_deck(DECK_W + DECK_FRAME + 2 * DECK_MARGIN, DECK_H + DECK_FRAME + 2 * DECK_MARGIN)
+        self._deck_mode = (False, False)  # (compact, narrow) currently applied
+        self._deck_mode_pending = False
         self.field.set_deck(deck)
         stage.add_overlay(deck)
+        self.field.connect("resize", self._on_stage_resize)
         stage.add_overlay(self._login_overlay())
         stage.add_overlay(self._help_overlay())
         self.set_child(stage)
+
+    def _on_stage_resize(self, _field, width: int, height: int) -> None:
+        """Size the deck to the window: the design size when it fits, smaller in tiles."""
+        fit = fit_deck(width, height)
+        if fit == self.deck_fit and not self._deck_mode_pending:
+            return
+        self.deck_fit = fit
+        if not self._deck_mode_pending:
+            # Resizing and restyling the deck mid-allocation is not allowed.
+            self._deck_mode_pending = True
+            GLib.idle_add(self._apply_deck_mode, priority=GLib.PRIORITY_HIGH_IDLE)
+
+    def _apply_deck_mode(self) -> bool:
+        self._deck_mode_pending = False
+        fit = self.deck_fit
+        self.deck.set_size_request(fit.width, fit.height)
+        if (fit.compact, fit.narrow) == self._deck_mode:
+            return False
+        self._deck_mode = (fit.compact, fit.narrow)
+        for cls, on in (("deck-compact", fit.compact), ("deck-narrow", fit.narrow)):
+            if on:
+                self.deck.add_css_class(cls)
+            else:
+                self.deck.remove_css_class(cls)
+        self.spectrum.set_content_height(44 if fit.compact else 84)
+        self.vol_lab.set_visible(not fit.narrow)
+        self.volume.set_size_request(72 if fit.narrow else 110, -1)
+        # Thin tiles: tighter gaps so the seek bar keeps a usable length.
+        self.transport_box.set_spacing(4 if fit.narrow else 10)
+        self.seek.set_size_request(96 if fit.narrow else -1, -1)
+        return False
 
     def _install_header(self) -> None:
         # Hypr draws the 2px square border. GTK CSD was a rounded title strip.
@@ -284,6 +328,7 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
     def _transport(self) -> Gtk.Widget:
         box = Gtk.Box(spacing=10)
         box.add_css_class("transport")
+        self.transport_box = box
         self.btn_prev = self._icon_button("media-skip-backward-symbolic", "Previous", flat=False)
         self.btn_play = self._icon_button("media-playback-start-symbolic", "Play", flat=False)
         self.btn_play.add_css_class("play")
@@ -325,6 +370,7 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         vol = Gtk.Box(spacing=8)
         vol_lab = Gtk.Label(label="VOL")
         vol_lab.add_css_class("knob-lbl")
+        self.vol_lab = vol_lab
         self.volume = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 1)
         self.volume.set_draw_value(False)
         self.volume.set_size_request(110, -1)
