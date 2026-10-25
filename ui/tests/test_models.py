@@ -320,3 +320,17 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class PushStatusTests(unittest.TestCase):
+    def test_pump_polls_slowly_once_subscribed_and_meter_only_while_playing(self):
+        from music_player.models import pump_intervals
+
+        self.assertEqual(pump_intervals(True, True), (0.08, 5.0))
+        self.assertEqual(pump_intervals(False, True), (1.0, 5.0))
+        self.assertEqual(pump_intervals(True, False)[1], 0.25)  # older engine: old poll
+
+    def test_position_interpolates_and_clamps(self):
+        from music_player.models import interpolate_position
+
+        self.assertAlmostEqual(interpolate_position((10.0, 100.0), 101.5, 200.0), 11.5)
+        self.assertAlmostEqual(interpolate_position((199.5, 100.0), 105.0, 200.0), 200.0)
+        self.assertAlmostEqual(interpolate_position((10.0, 100.0), 99.0, 0.0), 10.0)

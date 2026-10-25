@@ -19,6 +19,17 @@ export function mpvSocket() {
   return process.env.MUSIC_PLAYER_MPV_SOCK || path.join(configDir(), "mpv.sock");
 }
 
+// Extra mpv flags, space separated, e.g. MUSIC_PLAYER_MPV_ARGS="--ao=null" for a silent headless engine.
+export function mpvExtraArgs(env = process.env) {
+  return String(env.MUSIC_PLAYER_MPV_ARGS || "")
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+export function mprisEnabled(env = process.env) {
+  return !["1", "true", "yes"].includes(String(env.MUSIC_PLAYER_NO_MPRIS || "").toLowerCase());
+}
+
 export function runtimeDir(env = process.env) {
   const base = env.XDG_RUNTIME_DIR || os.tmpdir();
   return path.join(base, "music-player");

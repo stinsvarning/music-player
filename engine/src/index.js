@@ -13,6 +13,8 @@ import {
   httpEnabled,
   httpPort,
   httpTokenPath,
+  mpvExtraArgs,
+  mprisEnabled,
   mpvSocket,
   readCookiesFromSetting,
   savedCookiesPath,
@@ -20,6 +22,7 @@ import {
   urlCachePath,
 } from "./paths.js";
 import { Player } from "./player.js";
+import { StatusHub } from "./events.js";
 import { createSessionStore, sessionPath } from "./session.js";
 import { startMpris } from "./mpris.js";
 import { dispatch, listen } from "./server.js";
@@ -30,7 +33,7 @@ import { Youtube } from "./youtube.js";
 ensureConfigDir();
 
 const youtube = new Youtube();
-const mpv = new Mpv(mpvSocket());
+const mpv = new Mpv(mpvSocket(), { extraArgs: mpvExtraArgs() });
 const sessionStore = createSessionStore(sessionPath());
 const player = new Player({
   mpv,
@@ -42,6 +45,9 @@ player.restoreSession(sessionStore.load());
 
 let server;
 let httpServer;
+const hub = new StatusHub(player);
+// Commands that only read; everything else may have changed what clients show.
+const READ_ONLY = new Set(["help", "commands", "status", "bands", "queue.list", "search", "search.more", "playlists", "playlists.more", "playlist.tracks", "playlist.tracks.more", "lyrics", "track.liked", "auth.status"]);
 let authTimer = null;
 
 youtube.onAuthExpired = () => refreshAuth({ skipSaved: true });
@@ -127,6 +133,7 @@ async function main() {
   fs.writeFileSync(`${engineSocket()}.pid`, String(process.pid));
   killOrphanMpv(mpvSocket());
   await mpv.start();
+  mpv.observe?.(["pause", "volume", "idle-active", "duration"]);
   await player.applyEq();
   await player.applyVolume();
   try {
@@ -139,6 +146,7 @@ async function main() {
         return ok(authSnapshot());
       }
       if (req.cmd === "auth.refresh") {
+        hub.schedule();
         return ok(
           await refreshAuth({
             skipSaved: Boolean(req.skip_saved),
@@ -154,9 +162,15 @@ async function main() {
         youtube.authError = "";
         return ok({ ...authSnapshot(), signed_out: true });
       }
-      return dispatch(player, youtube, req);
+      try {
+        return await dispatch(player, youtube, req);
+      } finally {
+        if (!READ_ONLY.has(req.cmd)) {
+          hub.schedule();
+        }
+      }
     };
-    server = await listen(engineSocket(), handle);
+    server = await listen(engineSocket(), handle, { onSubscribe: (sock) => hub.add(sock) });
     if (httpEnabled()) {
       try {
         const token = loadOrCreateToken(httpTokenPath());
@@ -180,11 +194,13 @@ async function main() {
     }
     throw err;
   }
-  try {
-    await startMpris(player, { onQuit: () => shutdown() });
-    console.error("mpris ready (org.mpris.MediaPlayer2.Music)");
-  } catch (err) {
-    console.error("mpris skipped:", err.message || err);
+  if (mprisEnabled()) {
+    try {
+      await startMpris(player, { onQuit: () => shutdown() });
+      console.error("mpris ready (org.mpris.MediaPlayer2.Music)");
+    } catch (err) {
+      console.error("mpris skipped:", err.message || err);
+    }
   }
   console.error(`music-player engine ready (${engineSocket()})`);
   refreshAuth().catch((err) => {

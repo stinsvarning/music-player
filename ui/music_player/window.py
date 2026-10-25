@@ -26,11 +26,13 @@ from .models import (
     Track,
     default_queue_playlist_name,
     format_time,
+    interpolate_position,
     footer_kind,
     is_login_error,
     lyric_lines,
     parse_status,
     playback_word,
+    pump_intervals,
     parse_tracks,
     queue_needs_rebuild,
     should_apply_engine_rating,
@@ -119,6 +121,11 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         self._footer_kind = "idle"
         self._footer_timer = 0
         self._engine_seen = False
+        # Status arrives pushed from the engine (subscribe); polling is only a fallback.
+        self._subscribed = False
+        self._playing_hint = False
+        self._pos_base = (0.0, 0.0)  # (position, monotonic time it was true)
+        self._pos_timer = 0
 
         self._install_icons()
         Gtk.StyleContext.add_provider_for_display(
@@ -140,6 +147,7 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
             return
         self._mapped = True
         threading.Thread(target=self._pump, name="music-status", daemon=True).start()
+        threading.Thread(target=self._subscribe_loop, name="music-events", daemon=True).start()
         threading.Thread(target=self._command_loop, args=("transport",), name="music-transport", daemon=True).start()
         threading.Thread(target=self._command_loop, args=("query",), name="music-query", daemon=True).start()
         GLib.idle_add(self._bootstrap)
@@ -153,6 +161,9 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         if self._footer_timer:
             GLib.source_remove(self._footer_timer)
             self._footer_timer = 0
+        if self._pos_timer:
+            GLib.source_remove(self._pos_timer)
+            self._pos_timer = 0
 
     def _build(self) -> None:
         self._install_header()
@@ -736,19 +747,23 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         clear_list(widget)
 
     def _pump(self) -> None:
-        """Status and the meter only. Slow commands run on their own lanes."""
+        """The meter, plus a status poll that is only a fallback once subscribed.
+
+        Slow commands run on their own lanes; status changes arrive pushed on the
+        subscribe stream (see _subscribe_loop).
+        """
         last = 0.0
         last_bands = 0.0
         while not self._pump_stop.is_set():
             now = time.monotonic()
-            if now - last_bands >= 0.08:
+            if now - last_bands >= pump_intervals(self._playing_hint, self._subscribed)[0]:
                 try:
                     raw = self.ipc.request({"cmd": "bands"}, timeout=0.8, raise_on_error=False)
                     GLib.idle_add(self._on_bands, raw)
                 except OSError:
                     pass
                 last_bands = now
-            if now - last >= 0.25:
+            if now - last >= pump_intervals(self._playing_hint, self._subscribed)[1]:
                 try:
                     raw = self.ipc.request({"cmd": "status"}, timeout=2.0, raise_on_error=False)
                     GLib.idle_add(self._on_status, raw)
@@ -756,6 +771,24 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
                     GLib.idle_add(self._note_link_down, "")
                 last = now
             self._pump_stop.wait(0.05)
+
+    def _subscribe_loop(self) -> None:
+        """Hold a subscribe stream open; reconnect after drops, back off on old engines."""
+        def on_event(raw: dict) -> None:
+            if raw.get("subscribed"):
+                self._subscribed = True
+            GLib.idle_add(self._on_status, raw)
+
+        while not self._pump_stop.is_set():
+            wait = 1.0
+            try:
+                result = self.ipc.subscribe(on_event, self._pump_stop)
+                if result == "unsupported":
+                    wait = 30.0  # an older engine: keep polling, try again later
+            except (OSError, ValueError):
+                pass
+            self._subscribed = False
+            self._pump_stop.wait(wait)
 
     def _command_loop(self, name: str) -> None:
         lane = self._cmd_lanes[name]
@@ -802,7 +835,10 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         prev = self.status.track.id if self.status.track else ""
         was_in = bool(self.status.logged_in)
         self.status = parse_status(raw)
+        self._playing_hint = self.status.state == "playing"
+        self._pos_base = (self.status.position, time.monotonic())
         self._apply_status()
+        self._sync_pos_timer()
         if self.status.logged_in and not was_in:
             if getattr(self, "login_veil", None) is not None and self.login_veil.get_visible():
                 self._hide_login()
@@ -827,6 +863,30 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
             self._queue_sig = sig
             self._refresh_queue()
         return False
+
+    def _sync_pos_timer(self) -> None:
+        playing = self.status.state == "playing"
+        if playing and not self._pos_timer:
+            self._pos_timer = GLib.timeout_add(250, self._tick_position)
+        elif not playing and self._pos_timer:
+            GLib.source_remove(self._pos_timer)
+            self._pos_timer = 0
+
+    def _tick_position(self) -> bool:
+        """Between pushed updates, advance the clock locally while playing."""
+        st = self.status
+        if st.state != "playing":
+            self._pos_timer = 0
+            return False
+        pos = interpolate_position(self._pos_base, time.monotonic(), st.duration)
+        if self._seek.follow_status():
+            self._syncing = True
+            try:
+                self.pos_label.set_text(format_time(pos))
+                self.seek.set_value(pos)
+            finally:
+                self._syncing = False
+        return True
 
     def _apply_status(self) -> None:
         st = self.status
