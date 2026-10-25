@@ -14,7 +14,7 @@ from gi.repository import Gdk, Gio, GLib, GObject, Gtk
 
 from .ipc import EngineError, EngineIPC, lane_for
 from .layout import bind_ellipsize, caption_bar, clear_list, constrain_scroll, make_row
-from .prefs import load_vis_mode, save_vis_mode
+from .prefs import config_path, load_vis_mode, save_vis_mode
 from .spectrum import cycle_vis
 from .library import LibraryMixin
 from .login import LoginMixin
@@ -602,6 +602,35 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
             monitor = Gio.File.new_for_path(key).monitor(Gio.FileMonitorFlags.WATCH_MOVES, None)
             monitor.connect("changed", self._on_theme_changed)
             self._theme_monitors.append(monitor)
+        self._watch_config()
+
+    def _watch_config(self) -> None:
+        """Pick up a hand-edited vis_mode in config.toml without a restart."""
+        self._config_reload_id = 0
+        try:
+            folder = config_path().parent
+            if not folder.exists():
+                return
+            monitor = Gio.File.new_for_path(str(folder)).monitor(Gio.FileMonitorFlags.WATCH_MOVES, None)
+        except GLib.Error:
+            return
+        monitor.connect("changed", self._on_config_changed)
+        self._theme_monitors.append(monitor)
+
+    def _on_config_changed(self, _monitor, file, other, _event) -> None:
+        name = config_path().name
+        if (file is None or file.get_basename() != name) and (other is None or other.get_basename() != name):
+            return
+        if self._config_reload_id:
+            GLib.source_remove(self._config_reload_id)
+        self._config_reload_id = GLib.timeout_add(150, self._reload_config)
+
+    def _reload_config(self) -> bool:
+        self._config_reload_id = 0
+        mode = load_vis_mode()
+        if mode != getattr(self.spectrum, "mode", None):
+            self._apply_vis(mode)
+        return False
 
     def _on_theme_changed(self, *_a) -> None:
         if self._theme_reload_id:
@@ -837,6 +866,7 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
                 self.btn_sleep.set_tooltip_text("Sleep timer off")
             self.volume.set_value(st.volume)
             self.vol_num.set_text(str(int(st.volume)))
+            self._set_vis_volume(st.volume)
             self._set_account_tip(st.logged_in, st.auth_source)
             if st.track:
                 self.set_title(st.track.title or "Music")
@@ -897,7 +927,14 @@ class PlayerWindow(LoginMixin, LibraryMixin, Gtk.ApplicationWindow):
         if self._syncing:
             return
         self.vol_num.set_text(str(int(scale.get_value())))
+        self._set_vis_volume(scale.get_value())
         self._queue_cmd({"cmd": "volume", "value": scale.get_value()})
+
+    def _set_vis_volume(self, volume: float) -> None:
+        """The visualizers calm down and dim with the volume slider."""
+        self.spectrum.set_volume(volume)
+        if getattr(self, "field", None) is not None:
+            self.field.set_volume(volume)
 
     def _on_shuffle(self, btn: Gtk.ToggleButton) -> None:
         if self._syncing:

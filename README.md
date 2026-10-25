@@ -19,7 +19,7 @@ Works on **Omarchy** and other Arch-family systems including **CachyOS**. The ba
 - Like the current track (syncs with Liked Music)
 - Right-click a playlist to rename, delete, or start a mix
 - Shuffle, repeat, play similar, and a sleep timer
-- Full-monitor deck on a music-reactive field: LCD readout plus three vis looks (bricks, wave, orbit). Click the vis to cycle; the surround matches
+- Full-monitor deck on a music-reactive field: LCD readout plus three vis looks (bricks, wave, waterfall). Click the vis to cycle; the surround matches
 - Close or Super+W hides the window and audio keeps playing; Ctrl+Q quits
 - Follows the current Omarchy theme when those files exist
 - Optional Omarchy bar chip and Hyprland rules
@@ -91,7 +91,7 @@ Optional override:
 # ~/.config/music-player/config.toml
 cookies_from = "auto"
 # cookies_from = "firefox:~/.config/zen"
-# vis_mode = "bricks"  # bricks | wave | orbit
+# vis_mode = "bricks"  # bricks | wave | waterfall (old "orbit" maps to waterfall)
 ```
 
 ## Window vs engine
