@@ -4,13 +4,26 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { test } from "node:test";
+import { after, test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { lavfiEqualizer, parseAmetadataLog, spectrumBandFile, VIS_BANDS_HZ } from "../src/eq.js";
 import { Mpv } from "../src/mpv.js";
 
+// Every temp dir (wav files, sockets) goes when the file's tests finish.
+const tempDirs = [];
+function tempDir(prefix) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  tempDirs.push(dir);
+  return dir;
+}
+after(() => {
+  for (const dir of tempDirs) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("mpv plays a local file and seeks absolutely", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mpv-test-"));
+  const dir = tempDir("mpv-test-");
   const wav = path.join(dir, "silence.wav");
   const sock = path.join(dir, "mpv.sock");
   const made = spawnSync(
@@ -39,7 +52,7 @@ test("mpv plays a local file and seeks absolutely", async () => {
 });
 
 test("the spectrum taps run in mpv and write per-band RMS", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mpv-test-"));
+  const dir = tempDir("mpv-test-");
   const wav = path.join(dir, "tone.wav");
   const spec = path.join(dir, "spectrum");
   fs.mkdirSync(spec);
@@ -77,7 +90,7 @@ test("the spectrum taps run in mpv and write per-band RMS", async () => {
 
 test("turning the spectrum taps off and on mid-track drops no audio", async () => {
   // mpv swaps the lavfi graph in place; the pcm output must stay one unbroken sine.
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mpv-test-"));
+  const dir = tempDir("mpv-test-");
   const wav = path.join(dir, "tone.wav");
   const out = path.join(dir, "out.wav");
   const spec = path.join(dir, "spectrum");
@@ -129,7 +142,7 @@ test("turning the spectrum taps off and on mid-track drops no audio", async () =
 });
 
 test("observed properties arrive as property-change events", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mpv-test-"));
+  const dir = tempDir("mpv-test-");
   const sock = path.join(dir, "mpv.sock");
   const mpv = new Mpv(sock, { extraArgs: ["--ao=null"] });
   await mpv.start();
@@ -175,7 +188,7 @@ function fakeMpvServer(sockPath, { onCommand } = {}) {
 }
 
 test("commands share one connection and replies match by request_id", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mpv-fake-"));
+  const dir = tempDir("mpv-fake-");
   const sockPath = path.join(dir, "mpv.sock");
   let accepted = 0;
   const { server } = await fakeMpvServer(sockPath, {
@@ -203,7 +216,7 @@ test("commands share one connection and replies match by request_id", async () =
 });
 
 test("a dropped connection fails in-flight commands, reconnects, and re-observes", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mpv-fake-"));
+  const dir = tempDir("mpv-fake-");
   const sockPath = path.join(dir, "mpv.sock");
   const observes = [];
   const { server, conns } = await fakeMpvServer(sockPath, {
@@ -240,7 +253,7 @@ test("a dropped connection fails in-flight commands, reconnects, and re-observes
 });
 
 test("errors and timeouts reject only their own command", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mpv-fake-"));
+  const dir = tempDir("mpv-fake-");
   const sockPath = path.join(dir, "mpv.sock");
   const { server } = await fakeMpvServer(sockPath, {
     onCommand: (msg) => {
