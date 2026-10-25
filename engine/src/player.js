@@ -6,6 +6,20 @@ import { spectrumDir } from "./paths.js";
 import { isUnplayableError, unplayableError } from "./playable.js";
 import { parseSession } from "./session.js";
 
+/** Where row `at` ends up after the row at `from` moves to `to`. */
+export function movedIndex(at, from, to) {
+  if (at === from) {
+    return to;
+  }
+  if (from < at && to >= at) {
+    return at - 1;
+  }
+  if (from > at && to <= at) {
+    return at + 1;
+  }
+  return at;
+}
+
 export class Player {
   constructor({ mpv, youtube, readBands, persist, cache } = {}) {
     this.mpv = mpv;
@@ -259,21 +273,41 @@ export class Player {
     this.#saveSession();
   }
 
-  move(from, to) {
+  /**
+   * Reorder the queue. The playing row is followed by position, not by id, so a
+   * song that sits in the queue twice keeps the right copy playing. If the row
+   * mpv has preloaded for gapless is no longer what comes next, mpv's playlist
+   * is fixed at once (like removeAt) instead of on the debounce timer, so an end
+   * of file right after the move can never hand over to a stale entry.
+   */
+  move(rawFrom, rawTo) {
+    const from = Number(rawFrom);
+    const to = Number(rawTo);
     const len = this.queue.length;
-    if (!len || from === to) {
-      return;
-    }
-    if (from < 0 || to < 0 || from >= len || to >= len) {
+    if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to < 0 || from >= len || to >= len) {
       throw new Error("queue index out of range");
     }
-    const currentId = this.index >= 0 ? this.queue[this.index]?.id : null;
+    if (from === to) {
+      return Promise.resolve();
+    }
     const [item] = this.queue.splice(from, 1);
     this.queue.splice(to, 0, item);
-    if (currentId) {
-      this.index = this.queue.findIndex((t) => t.id === currentId);
+    if (this.index >= 0) {
+      this.index = movedIndex(this.index, from, to);
+    }
+    const pre = this._preloaded;
+    let stalePreload = false;
+    if (pre) {
+      const at = movedIndex(pre.index, from, to);
+      if (at === this.peekNextIndex() && this.queue[at]?.id === pre.id) {
+        this._preloaded = { ...pre, index: at };
+      } else {
+        this._preloaded = null; // a roll-over now re-checks via next()
+        stalePreload = true;
+      }
     }
     this.#saveSession();
+    return this.#resyncPreloadNow({ clear: stalePreload });
   }
 
   /**

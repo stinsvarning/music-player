@@ -166,7 +166,7 @@ export async function dispatch(player, youtube, req) {
       player.playNext(req.track);
       return ok({ total: player.queue.length, index: player.index });
     case "queue.move":
-      player.move(req.from, req.to);
+      await player.move(req.from, req.to);
       return ok({ tracks: player.queue, index: player.index, total: player.queue.length });
     case "queue.remove":
       await player.removeAt(req.index);
