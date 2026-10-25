@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -58,4 +59,112 @@ test("observed properties arrive as property-change events", async () => {
   } finally {
     await mpv.quit();
   }
+});
+
+function fakeMpvServer(sockPath, { onCommand } = {}) {
+  const conns = new Set();
+  const server = net.createServer((conn) => {
+    conns.add(conn);
+    conn.on("close", () => conns.delete(conn));
+    let buf = "";
+    conn.on("data", (chunk) => {
+      buf += chunk.toString();
+      while (buf.includes("\n")) {
+        const i = buf.indexOf("\n");
+        const msg = JSON.parse(buf.slice(0, i));
+        buf = buf.slice(i + 1);
+        const reply = onCommand ? onCommand(msg, conn) : { data: null };
+        if (reply && msg.request_id != null) {
+          conn.write(`${JSON.stringify({ request_id: msg.request_id, error: "success", ...reply })}\n`);
+        }
+      }
+    });
+  });
+  return new Promise((resolve) => server.listen(sockPath, () => resolve({ server, conns })));
+}
+
+test("commands share one connection and replies match by request_id", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mpv-fake-"));
+  const sockPath = path.join(dir, "mpv.sock");
+  let accepted = 0;
+  const { server } = await fakeMpvServer(sockPath, {
+    onCommand: (msg) => {
+      if (msg.command[0] === "get_property") {
+        return { data: `v:${msg.command[1]}` };
+      }
+      return { data: null };
+    },
+  });
+  server.on("connection", () => {
+    accepted += 1;
+  });
+  const mpv = new Mpv(sockPath);
+  await mpv.attach();
+  const got = await Promise.all(["a", "b", "c", "d"].map((p) => mpv.get(p)));
+  assert.deepEqual(got, ["v:a", "v:b", "v:c", "v:d"]);
+  for (let i = 0; i < 20; i += 1) {
+    await mpv.get("x");
+  }
+  assert.equal(accepted, 1);
+  assert.equal(mpv.connects, 1);
+  await mpv.quit();
+  await new Promise((r) => server.close(r));
+});
+
+test("a dropped connection fails in-flight commands, reconnects, and re-observes", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mpv-fake-"));
+  const sockPath = path.join(dir, "mpv.sock");
+  const observes = [];
+  const { server, conns } = await fakeMpvServer(sockPath, {
+    onCommand: (msg) => {
+      if (msg.command[0] === "observe_property") {
+        observes.push(msg.command[2]);
+        return null;
+      }
+      if (msg.command[0] === "get_property" && msg.command[1] === "hang") {
+        return null; // never answer
+      }
+      return { data: 7 };
+    },
+  });
+  const mpv = new Mpv(sockPath, { timeoutMs: 2000 });
+  const events = [];
+  mpv.onEvent((ev) => events.push(ev.event));
+  await mpv.attach();
+  mpv.observe(["pause"]);
+  await delay(30);
+  const hanging = mpv.get("hang");
+  await delay(30);
+  for (const c of conns) c.destroy();
+  await assert.rejects(hanging, /closed/);
+  await delay(400); // background reconnect
+  assert.equal(mpv.connects, 2);
+  assert.deepEqual(observes, ["pause", "pause"]);
+  for (const c of conns) c.write('{"event":"property-change","name":"pause","data":true}\n');
+  await delay(30);
+  assert.deepEqual(events, ["property-change"]);
+  assert.equal(await mpv.get("volume"), 7);
+  await mpv.quit();
+  await new Promise((r) => server.close(r));
+});
+
+test("errors and timeouts reject only their own command", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mpv-fake-"));
+  const sockPath = path.join(dir, "mpv.sock");
+  const { server } = await fakeMpvServer(sockPath, {
+    onCommand: (msg) => {
+      if (msg.command[1] === "missing") return { error: "property unavailable" };
+      if (msg.command[1] === "slow") return null;
+      return { data: 1 };
+    },
+  });
+  const mpv = new Mpv(sockPath, { timeoutMs: 150 });
+  await mpv.attach();
+  await assert.rejects(mpv.command(["get_property", "missing"]), /unavailable/);
+  assert.equal(await mpv.get("missing"), null);
+  await assert.rejects(mpv.command(["get_property", "slow"]), /timeout/);
+  assert.equal(await mpv.get("ok"), 1);
+  assert.equal(mpv.connects, 1);
+  await mpv.quit();
+  await new Promise((r) => server.close(r));
 });

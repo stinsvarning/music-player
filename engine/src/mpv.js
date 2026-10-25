@@ -3,35 +3,47 @@ import fs from "node:fs";
 import net from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
 
+const COMMAND_TIMEOUT_MS = 4000;
+const OBSERVE_BASE_ID = 100;
+
+/**
+ * mpv over its JSON IPC socket. One long-lived connection carries both commands
+ * (matched to replies by request_id) and events. If the connection drops it is
+ * re-opened on the next command or after a short backoff, and observed
+ * properties are re-registered so property-change events keep flowing.
+ */
 export class Mpv {
-  constructor(socketPath, { extraArgs = [] } = {}) {
+  constructor(socketPath, { extraArgs = [], timeoutMs = COMMAND_TIMEOUT_MS } = {}) {
     this.socketPath = socketPath;
     this.extraArgs = [...extraArgs];
+    this.timeoutMs = timeoutMs;
     this.proc = null;
     this.requestId = 1;
+    this.connects = 0; // how many times the IPC connection was (re)opened
     this._listeners = new Set();
-    this._eventSock = null;
     this._observed = [];
+    this._sock = null;
+    this._connecting = null;
+    this._pending = new Map();
+    this._buf = "";
+    this._closing = false;
+    this._retry = null;
   }
 
-  /** Ask mpv to report these properties as property-change events on the event socket. */
+  /** Ask mpv to report these properties as property-change events. */
   observe(names) {
+    const fresh = [];
     for (const name of names || []) {
       if (!this._observed.includes(name)) {
         this._observed.push(name);
+        fresh.push(name);
       }
     }
-    this.#sendObserves();
-  }
-
-  #sendObserves() {
-    const sock = this._eventSock;
-    if (!sock || sock.destroyed) {
-      return;
+    if (this._sock && !this._sock.destroyed) {
+      this.#sendObserves(fresh);
+    } else {
+      this.#ensure().catch(() => {});
     }
-    this._observed.forEach((name, i) => {
-      sock.write(`${JSON.stringify({ command: ["observe_property", 100 + i, name] })}\n`);
-    });
   }
 
   onEvent(fn) {
@@ -45,6 +57,7 @@ export class Mpv {
     } catch {
       /* missing is fine */
     }
+    this._closing = false;
     this.proc = spawn(
       "mpv",
       [
@@ -65,8 +78,12 @@ export class Mpv {
     const deadline = Date.now() + 4000;
     while (Date.now() < deadline) {
       if (fs.existsSync(this.socketPath)) {
-        this.#listenEvents();
-        return;
+        try {
+          await this.#ensure();
+          return;
+        } catch {
+          /* socket file exists but is not accepting yet */
+        }
       }
       if (this.proc.exitCode != null) {
         throw new Error(`mpv exited ${this.proc.exitCode}`);
@@ -76,56 +93,47 @@ export class Mpv {
     throw new Error("mpv ipc socket did not appear");
   }
 
+  /** Attach to an mpv that is already listening on socketPath (no spawn). */
+  async attach() {
+    this._closing = false;
+    await this.#ensure();
+  }
+
   async command(args) {
-    const id = this.requestId++;
-    const payload = `${JSON.stringify({ command: args, request_id: id })}\n`;
-    const sock = await this.#connect();
-    return await new Promise((resolve, reject) => {
-      let buf = "";
-      const onData = (chunk) => {
-        buf += chunk.toString();
-        const lines = buf.split("\n");
-        buf = lines.pop() || "";
-        for (const line of lines) {
-          if (!line.trim()) {
-            continue;
-          }
-          let msg;
-          try {
-            msg = JSON.parse(line);
-          } catch {
-            continue;
-          }
-          if (msg.request_id === id) {
-            cleanup();
-            if (msg.error && msg.error !== "success") {
-              reject(new Error(msg.error));
-            } else {
-              resolve(msg.data);
-            }
-            return;
-          }
-        }
-      };
-      const cleanup = () => {
-        sock.off("data", onData);
-        sock.destroy();
-      };
-      sock.on("data", onData);
-      sock.on("error", (err) => {
-        cleanup();
-        reject(err);
+    let sock;
+    try {
+      sock = await this.#ensure();
+    } catch (err) {
+      // one quick retry: mpv may be restarting its socket
+      await delay(50);
+      sock = await this.#ensure().catch(() => {
+        throw err;
       });
-      sock.write(payload);
-      setTimeout(() => {
-        cleanup();
+    }
+    const id = this.requestId++;
+    return await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this._pending.delete(id);
         reject(new Error("mpv command timeout"));
-      }, 4000);
+      }, this.timeoutMs);
+      timer.unref?.();
+      this._pending.set(id, { resolve, reject, timer });
+      sock.write(`${JSON.stringify({ command: args, request_id: id })}\n`, (err) => {
+        if (err && this._pending.has(id)) {
+          clearTimeout(timer);
+          this._pending.delete(id);
+          reject(err);
+        }
+      });
     });
   }
 
   async load(url) {
     await this.command(["loadfile", url, "replace"]);
+  }
+
+  async append(url) {
+    await this.command(["loadfile", url, "append"]);
   }
 
   async pause(paused) {
@@ -174,6 +182,11 @@ export class Mpv {
     } catch {
       /* socket may close */
     }
+    this._closing = true;
+    if (this._retry) {
+      clearTimeout(this._retry);
+      this._retry = null;
+    }
     if (this.proc && this.proc.exitCode == null) {
       this.proc.kill("SIGTERM");
       await delay(200);
@@ -182,10 +195,7 @@ export class Mpv {
       }
     }
     this.proc = null;
-    if (this._eventSock) {
-      this._eventSock.destroy();
-      this._eventSock = null;
-    }
+    this.#drop(new Error("mpv quit"));
     try {
       fs.unlinkSync(this.socketPath);
     } catch {
@@ -197,30 +207,102 @@ export class Mpv {
     return this.proc?.pid ?? null;
   }
 
-  #listenEvents() {
-    if (this._eventSock) {
+  get connected() {
+    return Boolean(this._sock && !this._sock.destroyed);
+  }
+
+  #ensure() {
+    if (this._sock && !this._sock.destroyed) {
+      return Promise.resolve(this._sock);
+    }
+    if (this._connecting) {
+      return this._connecting;
+    }
+    if (this._closing) {
+      return Promise.reject(new Error("mpv is closed"));
+    }
+    this._connecting = new Promise((resolve, reject) => {
+      const sock = net.connect(this.socketPath);
+      const fail = (err) => {
+        sock.destroy();
+        reject(err);
+      };
+      sock.once("error", fail);
+      sock.once("connect", () => {
+        sock.off("error", fail);
+        this._sock = sock;
+        this._buf = "";
+        this.connects += 1;
+        sock.setNoDelay?.(true);
+        sock.on("data", (chunk) => this.#onData(chunk));
+        sock.on("error", () => {});
+        sock.on("close", () => {
+          if (this._sock === sock) {
+            this.#drop(new Error("mpv ipc connection closed"));
+            this.#scheduleReconnect();
+          }
+        });
+        this.#sendObserves(this._observed);
+        resolve(sock);
+      });
+    }).finally(() => {
+      this._connecting = null;
+    });
+    return this._connecting;
+  }
+
+  // Keep events flowing after a drop even when nobody sends a command.
+  #scheduleReconnect(wait = 200) {
+    if (this._closing || this._retry || (this.proc && this.proc.exitCode != null)) {
       return;
     }
-    const sock = net.connect(this.socketPath);
-    this._eventSock = sock;
-    let buf = "";
-    sock.on("data", (chunk) => {
-      buf += chunk.toString();
-      const lines = buf.split("\n");
-      buf = lines.pop() || "";
-      for (const line of lines) {
-        if (!line.trim()) {
-          continue;
-        }
-        let msg;
-        try {
-          msg = JSON.parse(line);
-        } catch {
-          continue;
-        }
-        if (!msg?.event) {
-          continue;
-        }
+    this._retry = setTimeout(() => {
+      this._retry = null;
+      this.#ensure().catch(() => this.#scheduleReconnect(Math.min(2000, wait * 2)));
+    }, wait);
+    this._retry.unref?.();
+  }
+
+  #drop(err) {
+    const sock = this._sock;
+    this._sock = null;
+    this._buf = "";
+    if (sock && !sock.destroyed) {
+      sock.destroy();
+    }
+    for (const [id, waiter] of this._pending) {
+      clearTimeout(waiter.timer);
+      waiter.reject(err);
+      this._pending.delete(id);
+    }
+  }
+
+  #sendObserves(names) {
+    const sock = this._sock;
+    if (!sock || sock.destroyed) {
+      return;
+    }
+    for (const name of names) {
+      const i = this._observed.indexOf(name);
+      sock.write(`${JSON.stringify({ command: ["observe_property", OBSERVE_BASE_ID + i, name] })}\n`);
+    }
+  }
+
+  #onData(chunk) {
+    this._buf += chunk.toString();
+    const lines = this._buf.split("\n");
+    this._buf = lines.pop() || "";
+    for (const line of lines) {
+      if (!line.trim()) {
+        continue;
+      }
+      let msg;
+      try {
+        msg = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (msg?.event) {
         for (const fn of this._listeners) {
           try {
             fn(msg);
@@ -228,16 +310,19 @@ export class Mpv {
             /* listener errors must not kill the socket */
           }
         }
+        continue;
       }
-    });
-    sock.on("error", () => {});
-  }
-
-  #connect() {
-    return new Promise((resolve, reject) => {
-      const sock = net.connect(this.socketPath);
-      sock.once("connect", () => resolve(sock));
-      sock.once("error", reject);
-    });
+      const waiter = msg && this._pending.get(msg.request_id);
+      if (!waiter) {
+        continue; // e.g. the replies to observe_property
+      }
+      this._pending.delete(msg.request_id);
+      clearTimeout(waiter.timer);
+      if (msg.error && msg.error !== "success") {
+        waiter.reject(new Error(msg.error));
+      } else {
+        waiter.resolve(msg.data);
+      }
+    }
   }
 }
