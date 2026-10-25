@@ -120,7 +120,10 @@ class EngineLinkMixin:
         last_bands = 0.0
         while not self._pump_stop.is_set():
             now = time.monotonic()
-            if now - last_bands >= pump_intervals(self._playing_hint, self._subscribed)[0]:
+            # Visualizer off: no band polls at all (the engine stops sampling too).
+            if not getattr(self, "_bands_wanted", True):
+                last_bands = now
+            elif now - last_bands >= pump_intervals(self._playing_hint, self._subscribed)[0]:
                 try:
                     raw = self.ipc.request({"cmd": "bands"}, timeout=0.8, raise_on_error=False)
                     GLib.idle_add(self._on_bands, raw)
@@ -199,6 +202,7 @@ class EngineLinkMixin:
         prev = self.status.track.id if self.status.track else ""
         was_in = bool(self.status.logged_in)
         self.status = parse_status(raw)
+        self._sync_vis(raw)
         self._playing_hint = self.status.state == "playing"
         self._pos_base = (self.status.position, time.monotonic())
         self._apply_status()

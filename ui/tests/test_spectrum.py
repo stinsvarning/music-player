@@ -37,26 +37,28 @@ from music_player.spectrum import (
     volume_intensity,
 )
 from music_player.widgets.vis_paint import paint_field, paint_lcd
-from music_player.prefs import load_vis_mode, save_vis_mode
+from music_player.prefs import config_vis_mode, initial_vis_mode, load_vis_mode, saved_vis_mode
 from music_player.theme import FALLBACK
 from music_player.widgets.field import FieldView
 from music_player.widgets.spectrum import SpectrumView
 
 
 class VisModeTests(unittest.TestCase):
-    def test_three_named_modes_cycle(self):
+    def test_three_looks_then_off_cycle(self):
         self.assertEqual(VIS_MODES, ("bricks", "wave", "waterfall"))
         self.assertEqual(cycle_vis("bricks"), "wave")
         self.assertEqual(cycle_vis("wave"), "waterfall")
-        self.assertEqual(cycle_vis("waterfall"), "bricks")
+        self.assertEqual(cycle_vis("waterfall"), "off")
+        self.assertEqual(cycle_vis("off"), "bricks")
         self.assertEqual(cycle_vis("nope"), "bricks")
+        self.assertEqual(normalize_vis(" OFF "), "off")
 
     def test_old_orbit_maps_to_waterfall(self):
         self.assertEqual(normalize_vis("orbit"), "waterfall")
         self.assertEqual(normalize_vis(" Waterfall "), "waterfall")
         self.assertEqual(normalize_vis("nope"), "bricks")
         self.assertEqual(normalize_vis(None), "bricks")
-        self.assertEqual(cycle_vis("orbit"), "bricks")
+        self.assertEqual(cycle_vis("orbit"), "off")
         view = SpectrumView()
         view.set_mode("orbit")
         self.assertEqual(view.mode, "waterfall")
@@ -74,27 +76,49 @@ class VisModeTests(unittest.TestCase):
         self.assertEqual(meter.mode, "wave")
         self.assertEqual(field.mode, "wave")
 
-    def test_vis_mode_round_trips_in_config_without_clobbering_cookies(self):
+    def test_config_vis_mode_accepts_off_and_the_orbit_alias(self):
         from pathlib import Path
         import tempfile
 
         path = Path(tempfile.mkdtemp()) / "config.toml"
         path.write_text('cookies_from = "auto"\n')
-        save_vis_mode("waterfall", path)
-        self.assertEqual(load_vis_mode(path), "waterfall")
-        self.assertIn('cookies_from = "auto"', path.read_text())
-
-    def test_old_orbit_config_loads_as_waterfall(self):
-        from pathlib import Path
-        import tempfile
-
-        path = Path(tempfile.mkdtemp()) / "config.toml"
+        self.assertIsNone(config_vis_mode(path))
+        self.assertEqual(load_vis_mode(path), "bricks")
+        path.write_text('vis_mode = "off"  # quiet\n')
+        self.assertEqual(config_vis_mode(path), "off")
         path.write_text('vis_mode = "orbit"\n')
         self.assertEqual(load_vis_mode(path), "waterfall")
         path.write_text('vis_mode = "spiral"\n')
         self.assertEqual(load_vis_mode(path), "bricks")
-        save_vis_mode("orbit", path)
-        self.assertIn('vis_mode = "waterfall"', path.read_text())
+
+    def test_saved_choice_beats_config_which_beats_bricks(self):
+        import json
+        import os
+        from pathlib import Path
+        import tempfile
+
+        folder = Path(tempfile.mkdtemp())
+        cfg, session = folder / "config.toml", folder / "session.json"
+        old = {k: os.environ.get(k) for k in ("MUSIC_PLAYER_CONFIG", "MUSIC_PLAYER_SESSION")}
+        os.environ["MUSIC_PLAYER_CONFIG"] = str(cfg)
+        os.environ.pop("MUSIC_PLAYER_SESSION", None)
+        try:
+            self.assertEqual(initial_vis_mode(), "bricks")
+            cfg.write_text('vis_mode = "wave"\n')
+            self.assertEqual(initial_vis_mode(), "wave")
+            session.write_text(json.dumps({"version": 1, "vis_mode": None, "tracks": []}))
+            self.assertEqual(initial_vis_mode(), "wave")  # nothing saved yet
+            session.write_text(json.dumps({"version": 1, "vis_mode": "off", "tracks": []}))
+            self.assertEqual(saved_vis_mode(), "off")
+            self.assertEqual(initial_vis_mode(), "off")
+            session.write_text("{broken")
+            self.assertEqual(initial_vis_mode(), "wave")
+        finally:
+            for k, v in old.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
 
 
 class InterpolateTests(unittest.TestCase):

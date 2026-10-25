@@ -23,6 +23,17 @@ export const PRESETS = {
   Night: [1, 0, 0, 0, 0, -1, -2, -3, -2, -2],
 };
 
+// Visualizer looks the window cycles through; "off" also stops the band analysis.
+export const VIS_MODES = ["bricks", "wave", "waterfall", "off"];
+const VIS_ALIASES = { orbit: "waterfall", spectrogram: "waterfall" };
+
+/** A known look (old aliases mapped), or null. */
+export function visModeName(value) {
+  const raw = String(value ?? "").trim().toLowerCase();
+  const name = VIS_ALIASES[raw] || raw;
+  return VIS_MODES.includes(name) ? name : null;
+}
+
 export function preampFor(gains) {
   const peak = Math.max(0, ...(Array.isArray(gains) ? gains : []).map((g) => Number(g) || 0));
   return peak > 0 ? -peak : 0;

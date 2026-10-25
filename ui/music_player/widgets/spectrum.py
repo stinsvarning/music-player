@@ -10,6 +10,7 @@ from gi.repository import Gtk
 from music_player.spectrum import (
     BRICK_COLS,
     VIS_MODES,
+    VIS_OFF,
     FramePacer,
     LcdState,
     bar_index_at,
@@ -46,6 +47,7 @@ class SpectrumView(Gtk.DrawingArea):
         click = Gtk.GestureClick()
         click.connect("released", self._on_click)
         self.add_controller(click)
+        self._volume: float | None = None
         self._tick_id = 0
         self._wake()
 
@@ -57,7 +59,20 @@ class SpectrumView(Gtk.DrawingArea):
             self._tick_id = self.add_tick_callback(self._on_tick)
 
     def set_mode(self, mode: str) -> None:
-        self.mode = normalize_vis(mode)
+        mode = normalize_vis(mode)
+        if mode == self.mode:
+            return
+        if mode == VIS_OFF:
+            # Off: the resting grid, drawn once; the tick removes itself on its next frame.
+            self._awake = False
+            self._hover = -1
+        elif self.mode == VIS_OFF:
+            # Back on: start from rest rather than from whatever played before off.
+            self.state = LcdState()
+            self.state.set_volume(self._volume)
+            self._bands = [0.0] * 10
+            self._cols = [0] * BRICK_COLS
+        self.mode = mode
         self.queue_draw()
 
     def set_palette(self, palette: Palette) -> None:
@@ -65,9 +80,12 @@ class SpectrumView(Gtk.DrawingArea):
         self.queue_draw()
 
     def set_volume(self, volume: float | None) -> None:
+        self._volume = volume
         self.state.set_volume(volume)
 
     def set_bands(self, bands: list[float]) -> None:
+        if self.mode == VIS_OFF:
+            return
         self.state.set_bands(bands)
         self._bands = list(self.state.target)
         self._cols = brick_columns(self._bands)
@@ -103,6 +121,8 @@ class SpectrumView(Gtk.DrawingArea):
         self._set_hover(bar_index_at(x, self.get_width(), len(self._cols)))
 
     def _set_hover(self, idx: int) -> None:
+        if self.mode == VIS_OFF:
+            idx = -1  # nothing to point at
         if idx == self._hover:
             return
         self._hover = idx

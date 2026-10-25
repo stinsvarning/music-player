@@ -211,3 +211,59 @@ class IdleWidgetTests(unittest.TestCase):
         self.assertTrue(view._awake)
         self.assertTrue(view._tick_id)  # sound brought it back
         self.assertTrue(view._on_tick(view, clock))
+
+
+class VisOffTests(unittest.TestCase):
+    def test_off_strip_is_the_bricks_resting_grid_whatever_played(self):
+        lcd = LcdState()
+        for bands in music(random.Random(1), 30):
+            lcd.set_bands(bands)
+            lcd.advance(0.08)
+        off = cairo.ImageSurface(cairo.FORMAT_ARGB32, 568, 84)
+        paint_lcd(cairo.Context(off), 568, 84, "off", FALLBACK, lcd, hover=4)
+        rest = cairo.ImageSurface(cairo.FORMAT_ARGB32, 568, 84)
+        paint_lcd(cairo.Context(rest), 568, 84, "bricks", FALLBACK, LcdState())
+        self.assertEqual(bytes(off.get_data()), bytes(rest.get_data()))
+
+    def test_off_field_has_no_lit_cells(self):
+        state = FieldState()
+        state.set_volume(70)
+        for bands in music(random.Random(2), 60)[:20]:
+            state.set_bands(bands)
+        geom = field_geom(1916, 1570, (368.0, 385.0, 1548.0, 1185.0))
+        self.assertTrue(any(field_cells(geom, 1570, "bricks", state, 1.0)))
+        self.assertEqual(field_cells(geom, 1570, "off", state, 1.0), ([], [], []))
+
+    def test_off_widgets_ignore_bands_and_stop_redrawing(self):
+        from music_player.widgets.field import FieldView
+        from music_player.widgets.spectrum import SpectrumView
+
+        strip, field = SpectrumView(), FieldView()
+        strip.set_volume(40)
+        field.set_volume(40)
+        strip.set_bands([0.8] * 10)
+        field.set_bands([0.8] * 10)
+        strip.set_mode("off")
+        field.set_mode("off")
+        queued = []
+        strip.queue_draw = lambda: queued.append("strip")
+        field.queue_draw = lambda: queued.append("field")
+        clock = _Clock()
+        self.assertFalse(strip._on_tick(strip, clock))  # the frame callback removes itself
+        self.assertEqual(strip._tick_id, 0)
+        for _ in range(5):
+            strip.set_bands([0.9] * 10)
+            field.set_bands([0.9] * 10)
+        self.assertEqual(queued, [])
+        self.assertEqual(strip._tick_id, 0)
+        # back on: from rest, at the same volume, and animating again
+        strip.set_mode("wave")
+        field.set_mode("wave")
+        self.assertEqual(strip.state.target, LcdState().target)
+        self.assertEqual(strip.state.intensity, field.state.intensity)
+        self.assertNotEqual(strip.state.intensity, LcdState().intensity)
+        self.assertFalse(any(field.state.level))
+        strip.set_bands([0.9] * 10)
+        field.set_bands([0.9] * 10)
+        self.assertTrue(strip._awake and strip._tick_id)
+        self.assertIn("field", queued)

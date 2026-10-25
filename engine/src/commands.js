@@ -22,6 +22,7 @@ export const COMMANDS = [
   { cmd: "repeat", risk: "write", args: [arg("name", "string")], summary: "Repeat off, all, one, or cycle" },
   { cmd: "automix", risk: "write", args: [arg("name", "string")], summary: "Play similar on, off, or toggle" },
   { cmd: "eq", risk: "write", args: [arg("name", "string"), arg("band", "number"), arg("value", "number")], summary: "EQ preset Flat/Warm/Vocal/Bass/Night or one band" },
+  { cmd: "vis", risk: "write", args: [arg("mode", "string", true), arg("save", "boolean")], summary: "Visualizer bricks/wave/waterfall/off (off stops the band analysis); remembered unless save is false" },
   { cmd: "sleep", risk: "write", args: [arg("minutes", "number")], summary: "Sleep timer in minutes; 0 clears it" },
   { cmd: "queue.list", risk: "read", args: [], summary: "Queue tracks and current index" },
   { cmd: "queue.play", risk: "write", args: [arg("index", "number", true)], summary: "Play a queue index" },

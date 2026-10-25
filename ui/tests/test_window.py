@@ -235,16 +235,55 @@ class WindowChromeTests(unittest.TestCase):
         self.assertFalse(icon.exists())
 
     def test_clicking_the_vis_cycles_meter_and_field(self):
-        from music_player.spectrum import cycle_vis
-
         self.assertEqual(self.win.spectrum.mode, "bricks")
         self.assertEqual(self.win.field.mode, "bricks")
-        self.win._cycle_vis()
+        seen = []
+        for _ in range(4):
+            self.win._cycle_vis()
+            self.assertEqual(self.win.field.mode, self.win.spectrum.mode)
+            seen.append(self.win.spectrum.mode)
+        self.assertEqual(seen, ["wave", "waterfall", "off", "bricks"])
+        # each click is remembered by the engine (session.json), not written to config.toml
+        self.assertEqual([c for c in self.cmds if c["cmd"] == "vis"], [{"cmd": "vis", "mode": m} for m in seen])
+        self.assertFalse(self._cfg.exists())
+
+    def test_off_stops_band_polling_and_on_resumes_it(self):
+        self.win._apply_vis("off")
+        self.assertFalse(self.win._bands_wanted)
+        self.win._on_status({"ok": True, "state": "playing", "position": 0, "duration": 100, "volume": 50})
+        self.win.spectrum.queue_draw = lambda: self.fail("off must not redraw on bands")
+        self.win._on_bands({"ok": True, "bands": [0.9] * 10})
+        del self.win.spectrum.queue_draw
+        self.win._apply_vis("wave")
+        self.assertTrue(self.win._bands_wanted)
+        self.win._on_bands({"ok": True, "bands": [0.9] * 10})
+        self.assertTrue(self.win.spectrum._awake)
+
+    def test_engine_analysis_follows_the_window(self):
+        base = {"ok": True, "state": "playing", "position": 0, "duration": 100, "volume": 50}
+        self.win._apply_vis("off")  # e.g. vis_mode = "off" in config on a first run
+        self.win._on_status({**base, "vis_mode": None, "vis_on": True})
+        self.assertEqual(self.cmds[-1], {"cmd": "vis", "mode": "off", "save": False})
+        n = len(self.cmds)
+        self.win._on_status({**base, "vis_mode": None, "vis_on": True})
+        self.assertEqual(len(self.cmds), n)  # asked once, not on every status
+        self.win._on_status({**base, "vis_mode": None, "vis_on": False})
+        self.assertEqual(len(self.cmds), n)
+        # a look chosen elsewhere (music-player-ctl vis wave) shows up here
+        self.win._on_status({**base, "vis_mode": "wave", "vis_on": True})
         self.assertEqual(self.win.spectrum.mode, "wave")
         self.assertEqual(self.win.field.mode, "wave")
+        self.assertEqual(len(self.cmds), n)
+        # an older engine without the keys is left alone
+        self.win._on_status(base)
+        self.assertEqual(self.win.spectrum.mode, "wave")
+
+    def test_a_status_from_before_a_click_does_not_undo_it(self):
+        base = {"ok": True, "state": "playing", "position": 0, "duration": 100, "volume": 50}
+        self.win._on_status({**base, "vis_mode": "bricks", "vis_on": True})
         self.win._cycle_vis()
-        self.assertEqual(self.win.spectrum.mode, cycle_vis("wave"))
-        self.assertEqual(self.win.field.mode, self.win.spectrum.mode)
+        self.win._on_status({**base, "vis_mode": "bricks", "vis_on": True})
+        self.assertEqual(self.win.spectrum.mode, "wave")
 
     def test_volume_scales_the_visualizers(self):
         from music_player.spectrum import volume_intensity
@@ -274,9 +313,24 @@ class WindowChromeTests(unittest.TestCase):
         self.win._reload_config()
         self.assertEqual(self.win.spectrum.mode, "waterfall")
         self.assertEqual(self.win.field.mode, "waterfall")
+        self.assertEqual(self.cmds[-1], {"cmd": "vis", "mode": "waterfall"})  # becomes the saved choice
+        self._cfg.write_text('vis_mode = "off"\n')
+        self.win._reload_config()
+        self.assertEqual(self.win.spectrum.mode, "off")
+        self.assertEqual(self.cmds[-1], {"cmd": "vis", "mode": "off"})
         self._cfg.write_text('vis_mode = "wave"\n')
         self.win._reload_config()
         self.assertEqual(self.win.spectrum.mode, "wave")
+
+    def test_other_config_edits_keep_the_clicked_look(self):
+        self._cfg.write_text('vis_mode = "wave"\n')
+        self.win._reload_config()
+        self.win._cycle_vis()  # waterfall, saved by the engine
+        n = len(self.cmds)
+        self._cfg.write_text('vis_mode = "wave"\naccent = "#ff0000"\n')
+        self.win._reload_config()
+        self.assertEqual(self.win.spectrum.mode, "waterfall")
+        self.assertEqual(len(self.cmds), n)
 
     def test_login_card_lists_browsers_on_this_computer(self):
         self.win._fill_login_browsers(

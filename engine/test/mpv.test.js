@@ -75,6 +75,59 @@ test("the spectrum taps run in mpv and write per-band RMS", async () => {
   }
 });
 
+test("turning the spectrum taps off and on mid-track drops no audio", async () => {
+  // mpv swaps the lavfi graph in place; the pcm output must stay one unbroken sine.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mpv-test-"));
+  const wav = path.join(dir, "tone.wav");
+  const out = path.join(dir, "out.wav");
+  const spec = path.join(dir, "spectrum");
+  fs.mkdirSync(spec);
+  const made = spawnSync("ffmpeg", ["-y", "-f", "lavfi", "-i", "sine=f=1000:r=48000", "-ac", "2", "-t", "2", wav], { encoding: "utf8" });
+  assert.equal(made.status, 0, made.stderr);
+  // a file instead of a sound card; arealtime keeps it at playback speed so the toggles land mid-track
+  const mpv = new Mpv(path.join(dir, "mpv.sock"), { extraArgs: ["--ao=pcm", `--ao-pcm-file=${out}`] });
+  const flat = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+  const pace = ",lavfi=[arealtime]";
+  await mpv.start();
+  try {
+    await mpv.setAf(lavfiEqualizer(flat, spec) + pace);
+    await mpv.load(wav);
+    await delay(200);
+    if (await mpv.get("pause")) {
+      await mpv.pause(false);
+    }
+    for (let i = 0; i < 12; i += 1) {
+      await delay(120);
+      await mpv.setAf(lavfiEqualizer(flat, i % 2 ? spec : "") + pace);
+    }
+    for (let i = 0; i < 40 && !(await mpv.get("idle-active")); i += 1) {
+      await delay(100);
+    }
+  } finally {
+    await mpv.quit();
+  }
+  try {
+    const buf = fs.readFileSync(out);
+    const at = buf.indexOf("data") + 8;
+    const left = [];
+    for (let o = at; o + 4 <= buf.length; o += 4) {
+      left.push(buf.readInt16LE(o) / 32768);
+    }
+    assert.ok(Math.abs(left.length - 96000) < 1200, `samples ${left.length}`);
+    // a pure sine obeys x[n] = 2cos(w) x[n-1] - x[n-2]; a dropped or doubled block breaks it
+    const k = 2 * Math.cos((2 * Math.PI * 1000) / 48000);
+    let breaks = 0;
+    for (let n = 2; n < left.length; n += 1) {
+      if (Math.abs(left[n] - (k * left[n - 1] - left[n - 2])) > 0.002) {
+        breaks += 1;
+      }
+    }
+    assert.equal(breaks, 0);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("observed properties arrive as property-change events", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mpv-test-"));
   const sock = path.join(dir, "mpv.sock");

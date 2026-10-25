@@ -15,7 +15,9 @@ FIELD_COLS = 81
 CLEAR_REACH = 240.0
 CLEAR_CURVE = 3.0
 SPECTRUM_FLOOR = 0.08
-VIS_MODES = ("bricks", "wave", "waterfall")
+VIS_MODES = ("bricks", "wave", "waterfall")  # the looks that draw something
+VIS_OFF = "off"  # flat resting grid, no animation, no band analysis
+VIS_CYCLE = (*VIS_MODES, VIS_OFF)  # click order
 # Older config values that should still land somewhere sensible.
 VIS_ALIASES = {"orbit": "waterfall", "spectrogram": "waterfall"}
 
@@ -148,18 +150,24 @@ class FramePacer:
         self.elapsed = 0.0
 
 
-def normalize_vis(mode: object) -> str:
-    """Known mode, an old alias (orbit -> waterfall), or the first mode."""
+def vis_name(mode: object) -> str | None:
+    """A known setting (a look or off, old aliases mapped), or None."""
     name = str(mode or "").strip().lower()
     name = VIS_ALIASES.get(name, name)
-    return name if name in VIS_MODES else VIS_MODES[0]
+    return name if name in VIS_CYCLE else None
+
+
+def normalize_vis(mode: object) -> str:
+    """Known setting, an old alias (orbit -> waterfall), or the first look."""
+    return vis_name(mode) or VIS_MODES[0]
 
 
 def cycle_vis(mode: str) -> str:
-    name = VIS_ALIASES.get(str(mode or "").strip().lower(), str(mode or "").strip().lower())
-    if name not in VIS_MODES:
+    """bricks -> wave -> waterfall -> off -> bricks."""
+    name = vis_name(mode)
+    if name is None:
         return VIS_MODES[0]
-    return VIS_MODES[(VIS_MODES.index(name) + 1) % len(VIS_MODES)]
+    return VIS_CYCLE[(VIS_CYCLE.index(name) + 1) % len(VIS_CYCLE)]
 
 
 # ------------------------------------------------------------ smoothing

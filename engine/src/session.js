@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { PRESETS } from "./eq.js";
+import { PRESETS, visModeName } from "./eq.js";
 import { configDir } from "./paths.js";
 
 export const SESSION_VERSION = 1;
@@ -112,6 +112,8 @@ export function serializeSession(state = {}) {
       state.sleep_minutes ?? state.sleepMinutes,
       storedSleepUntil(state.sleep_until ?? state.sleepUntil),
     ),
+    // The window's last chosen visualizer look; null until one is picked.
+    vis_mode: visModeName(state.vis_mode),
     tracks,
   };
 }

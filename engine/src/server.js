@@ -153,6 +153,9 @@ export async function dispatch(player, youtube, req) {
         await player.playTrack(req.track, { replaceQueue: req.replace !== false });
       }
       return ok({ total: player.queue.length, index: player.index });
+    case "vis":
+      await player.setVis(req.mode ?? req.name, { save: req.save !== false });
+      return ok({ vis_mode: player.visSaved, vis_on: player.analysing });
     case "sleep":
       player.setSleep(req.minutes ?? req.value ?? 0);
       return ok({ sleep_minutes: player.sleepMinutes, sleep_remaining: player.sleepRemaining() });
