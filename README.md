@@ -139,6 +139,30 @@ By default the window starts the engine when it opens. Run the engine as a user 
 - `MUSIC_PLAYER_NO_SYSTEMD=1 music-player` skips the service for one launch.
 - Logs: `journalctl --user -u music-player-engine`. Remove it with `./packaging/install-service.sh --remove`.
 
+## Performance
+
+It's light on memory and close to free when idle. While playing, it uses about as much CPU as the browser options, even though it animates a 60 fps visualizer and they mostly show a still page.
+
+| | Playing, window visible | Playing, window hidden | Idle | Memory (PSS / RSS) | Processes |
+|---|---|---|---|---|---|
+| **music-player** (wave / bricks / waterfall) | 7.2% / 6.1% / 4.5% | 2.9% | 0.4% | ~210 MB / ~335 MB | 3 |
+| music.youtube.com in Chromium | 3.6% | 2.3% | 8.8% | ~640 MB / ~1.3 GB | 13 |
+| Pear Desktop 3.12 (Electron) | 5.5% | 1.8% | 8.6% | ~570 MB / ~1.1 GB | 8 |
+| mpv alone (no window, no visualizer) | 0.5% | 0.5% | — | ~59 MB / ~90 MB | 1 |
+
+CPU is a percentage of **one** core, averaged over 60 s and summed over every process involved. Memory is summed too; PSS counts shared pages once.
+
+- **When the window is hidden** (another workspace), nothing is drawn. What's left is mpv decoding plus the visualizer's band analysis.
+- **Idle** means the window open with nothing playing. The web player keeps animating its home page, so it doesn't idle down.
+- **Window size** barely matters: a half-screen and a near-maximized window cost the same.
+
+<details>
+<summary>How this was measured</summary>
+
+Measured on 2026-10-25 on an Intel Core Ultra 9 285K (24 cores, integrated graphics) running Arch/Omarchy, Hyprland 0.56, GTK 4.24 and mpv 0.41. Every player played the same 5:45 track. Each figure is the median of two fresh launches. "Visible" means the window was drawn by a headless 60 Hz gamescope compositor at 3840×1600. "Hidden" means it was on a workspace not being shown. Audio output was disabled for every candidate (`--ao=null` for mpv, `--mute-audio --disable-audio-output` for Chromium and Pear), so the audio server's own cost isn't counted. GPU use wasn't measured. music-player ran signed in; Chromium and Pear ran signed out, with ads. The Chromium and Pear numbers come from the same session, before the visualizer optimisations in `de1b5a3`.
+
+</details>
+
 ## How it works
 
 ```
