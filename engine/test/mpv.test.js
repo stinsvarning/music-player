@@ -10,11 +10,11 @@ import { Mpv } from "../src/mpv.js";
 
 test("mpv plays a local file and seeks absolutely", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mpv-test-"));
-  const wav = path.join(dir, "tone.wav");
+  const wav = path.join(dir, "silence.wav");
   const sock = path.join(dir, "mpv.sock");
   const made = spawnSync(
     "ffmpeg",
-    ["-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=5", "-ar", "44100", wav],
+    ["-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono", "-t", "5", wav],
     { encoding: "utf8" },
   );
   assert.equal(made.status, 0, made.stderr);

@@ -9,6 +9,7 @@ gi.require_version("Gdk", "4.0")
 
 from gi.repository import Gdk, Gtk
 
+from .models import clamp_seek_target
 
 
 HELP_LINES = (
@@ -87,7 +88,8 @@ class KeysMixin:
             return True
         if keyval in (Gdk.KEY_Left, Gdk.KEY_Right):
             delta = -5 if keyval == Gdk.KEY_Left else 5
-            self._queue_cmd({"cmd": "seek", "value": max(0, self.status.position + delta)})
+            target = clamp_seek_target(self.status.position + delta, self.status.duration)
+            self._queue_cmd({"cmd": "seek", "value": target})
             return True
         if keyval == Gdk.KEY_F11:
             if self.is_fullscreen():

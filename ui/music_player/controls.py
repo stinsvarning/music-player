@@ -11,7 +11,7 @@ gi.require_version("Gdk", "4.0")
 
 from gi.repository import GLib, Gtk
 
-from .models import format_time
+from .models import clamp_seek_target, format_time
 
 
 class ControlsMixin:
@@ -47,6 +47,7 @@ class ControlsMixin:
         target = self._seek.release() if immediate else self._seek.take_settled()
         if target is None:
             return False
+        target = clamp_seek_target(target, self.status.duration)
         self._queue_cmd({"cmd": "seek", "value": target})
         return False
 

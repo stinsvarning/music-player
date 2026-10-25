@@ -413,7 +413,7 @@ test("seek updates the persisted playhead", async () => {
   const snaps = [];
   const { player } = makePlayer();
   player.persist = (snap) => snaps.push(snap);
-  player.replaceQueue([track("a")], 0);
+  player.replaceQueue([track("a", { duration_secs: 200 })], 0);
   await player.seek(18);
   assert.equal(player.position, 18);
   assert.equal(snaps.at(-1).position, 18);

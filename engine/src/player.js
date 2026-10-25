@@ -236,22 +236,128 @@ export class Player {
     this.#saveSession();
   }
 
-  removeAt(index) {
-    if (index < 0 || index >= this.queue.length) {
+  /**
+   * Drop a queue row. Removing the row that is playing moves on to what is now
+   * next (keeping play/pause), or stops cleanly when nothing follows; removing
+   * the row mpv has preloaded for gapless drops that entry right away so the
+   * hand-over at end of file can never land on a removed track.
+   */
+  async removeAt(rawIndex) {
+    const index = Number(rawIndex);
+    if (!Number.isInteger(index) || index < 0 || index >= this.queue.length) {
       throw new Error("queue index out of range");
     }
     const wasCurrent = index === this.index;
+    const live = wasCurrent && this.state !== "stopped";
+    const keepPaused = this.state === "paused";
     this.queue.splice(index, 1);
     if (index < this.index) {
       this.index -= 1;
     } else if (wasCurrent) {
       this.index = Math.min(index, this.queue.length - 1);
     }
+    const pre = this._preloaded;
+    let stalePreload = false;
+    if (pre) {
+      if (wasCurrent || pre.index === index) {
+        this._preloaded = null; // stale: a roll-over now re-checks via next()
+        stalePreload = true;
+      } else if (index < pre.index) {
+        this._preloaded = { ...pre, index: pre.index - 1 };
+      }
+    }
+    if (wasCurrent) {
+      this.position = 0;
+    }
     if (!this.queue.length) {
       this.index = -1;
-      this.state = "stopped";
+      if (live) {
+        await this.#haltPlayback();
+      } else {
+        this.state = "stopped";
+      }
+      this.#saveSession();
+      return;
     }
+    if (!live) {
+      await this.#resyncPreloadNow({ clear: stalePreload });
+      this.#saveSession();
+      return;
+    }
+    let at = index;
+    if (at >= this.queue.length) {
+      // the removed row was the last one
+      if (this.repeat !== "all") {
+        this.index = this.queue.length - 1;
+        await this.#haltPlayback();
+        this.#saveSession();
+        return;
+      }
+      if (this.shuffle) {
+        this.#shuffleRest({ wrap: true });
+      }
+      at = 0;
+    }
+    await this.#playFrom(at, { paused: keepPaused });
     this.#saveSession();
+  }
+
+  // Load the first playable row from `start` on; stop cleanly if there is none.
+  async #playFrom(start, { paused = false } = {}) {
+    for (let at = start; at < this.queue.length; at += 1) {
+      this.index = at;
+      this.position = 0;
+      try {
+        await this.#loadCurrent({ paused });
+        return true;
+      } catch (err) {
+        if (!isUnplayableError(err)) {
+          throw err;
+        }
+      }
+    }
+    this.index = Math.min(start, this.queue.length - 1);
+    await this.#haltPlayback();
+    return false;
+  }
+
+  // Unload the file (mpv goes idle with an empty playlist), unlike pause-at-end.
+  async #haltPlayback() {
+    this._ignoreEof = true;
+    this._preloaded = null;
+    this._rolled = null;
+    this.position = 0;
+    this.state = "stopped";
+    try {
+      if (typeof this.mpv?.command === "function") {
+        await this.mpv.command(["stop"]);
+      } else {
+        await this.mpv.pause(true);
+      }
+    } finally {
+      setTimeout(() => {
+        this._ignoreEof = false;
+      }, 400);
+    }
+  }
+
+  // Re-sync mpv's queued entry now instead of on the debounce timer. `clear`
+  // empties mpv's playlist first: a dropped entry is no longer in _preloaded, so
+  // syncPreload alone would not know it is still sitting in mpv.
+  async #resyncPreloadNow({ clear = false } = {}) {
+    if (typeof this.mpv?.append !== "function" || typeof this.mpv?.command !== "function") {
+      return;
+    }
+    this._preloadChain = this._preloadChain
+      .then(async () => {
+        if (clear && this.state !== "stopped") {
+          this._preloaded = null;
+          await this.mpv.command(["playlist-clear"]);
+        }
+        return this.syncPreload();
+      })
+      .catch(() => {});
+    await this._preloadChain;
   }
 
   replaceQueue(tracks, startIndex = 0) {
@@ -443,12 +549,27 @@ export class Player {
   }
 
   async seek(seconds) {
-    const n = Number(seconds);
-    this.position = Number.isFinite(n) && n > 0 ? n : 0;
+    this.position = clampSeek(seconds, await this.#knownDuration());
     if (typeof this.mpv?.seekAbsolute === "function") {
       await this.mpv.seekAbsolute(this.position);
     }
     this.#saveSession();
+  }
+
+  // Length of the current track: mpv's live value, else the queue metadata.
+  async #knownDuration() {
+    if (this.state !== "stopped" && typeof this.mpv?.get === "function") {
+      try {
+        const live = Number(await this.mpv.get("duration"));
+        if (Number.isFinite(live) && live > 0) {
+          return live;
+        }
+      } catch {
+        /* idle mpv */
+      }
+    }
+    const meta = Number(this.queue[this.index]?.duration_secs);
+    return Number.isFinite(meta) && meta > 0 ? meta : 0;
   }
 
   async bands() {
@@ -787,7 +908,7 @@ export class Player {
     }
   }
 
-  async #loadCurrent({ keepPosition = false } = {}) {
+  async #loadCurrent({ keepPosition = false, paused = false } = {}) {
     const track = this.queue[this.index];
     if (!track) {
       throw new Error("nothing to play");
@@ -801,6 +922,9 @@ export class Player {
     try {
       const cached = this.cache.get(track.id);
       let url = cached || (await this.#resolve(track.id));
+      if (paused) {
+        await this.mpv.pause(true); // pause is sticky in mpv: the new file opens paused
+      }
       try {
         await this.mpv.load(url);
       } catch (err) {
@@ -811,9 +935,11 @@ export class Player {
         url = await this.#resolve(track.id);
         await this.mpv.load(url);
       }
-      this.state = "playing";
+      this.state = paused ? "paused" : "playing";
       await this.#resumeSeek(this.position);
-      await this.mpv.pause(false);
+      if (!paused) {
+        await this.mpv.pause(false);
+      }
       this.prefetchNext();
       this.#refreshRating(track.id);
     } catch (err) {
@@ -1004,6 +1130,21 @@ export class Player {
     this.cache.set(videoId, url);
     return url;
   }
+}
+
+// Seeking to or past the end makes mpv finish the file, which reads as a skip.
+// Keep seeks this far before the end; the track then still ends naturally.
+export const SEEK_END_MARGIN_S = 1;
+
+/** Clamp an absolute seek target to [0, duration - margin] (no upper bound if duration is unknown). */
+export function clampSeek(seconds, duration) {
+  const n = Number(seconds);
+  let target = Number.isFinite(n) && n > 0 ? n : 0;
+  const dur = Number(duration);
+  if (Number.isFinite(dur) && dur > 0) {
+    target = Math.min(target, Math.max(0, dur - SEEK_END_MARGIN_S));
+  }
+  return target;
 }
 
 // mpv events that change what status() reports (observed properties arrive as property-change).

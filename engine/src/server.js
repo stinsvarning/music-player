@@ -166,7 +166,7 @@ export async function dispatch(player, youtube, req) {
       player.move(req.from, req.to);
       return ok({ tracks: player.queue, index: player.index, total: player.queue.length });
     case "queue.remove":
-      player.removeAt(req.index);
+      await player.removeAt(req.index);
       return ok({ tracks: player.queue, index: player.index, total: player.queue.length });
     case "track.liked": {
       const id = videoIdOf(req);
