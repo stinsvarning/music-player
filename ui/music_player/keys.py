@@ -21,6 +21,7 @@ HELP_LINES = (
     "q  m       queue, library",
     "/          find",
     "delete     remove the selected queue row",
+    "ctrl+z     undo remove, mix or clear",
     "alt+up dn  move the selected queue row",
     "menu       open the context menu",
     "f11        fullscreen",
@@ -55,6 +56,9 @@ class KeysMixin:
             return True
         if keyval == Gdk.KEY_question:
             self._toggle_help()
+            return True
+        if mods & Gdk.ModifierType.CONTROL_MASK and keyval in (Gdk.KEY_z, Gdk.KEY_Z):
+            self._undo()
             return True
         if keyval == Gdk.KEY_Escape:
             self.set_focus(None)

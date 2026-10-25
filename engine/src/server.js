@@ -141,7 +141,15 @@ export async function dispatch(player, youtube, req) {
       }
       return ok({ eq_preset: player.eqPreset, eq_bands: player.eqBands });
     case "queue.list":
-      return ok({ tracks: player.queue, index: player.index, total: player.queue.length });
+      return ok({ tracks: player.queue, index: player.index, total: player.queue.length, undo: player.undoLabel });
+    case "queue.clear_upcoming": {
+      const removed = await player.clearUpcoming();
+      return ok({ removed, total: player.queue.length, index: player.index, undo: player.undoLabel });
+    }
+    case "queue.undo": {
+      const result = await player.undo();
+      return ok({ undone: result.label, tracks: player.queue, index: player.index, total: player.queue.length, undo: player.undoLabel });
+    }
     case "queue.play":
       await player.playIndex(req.index);
       return ok();

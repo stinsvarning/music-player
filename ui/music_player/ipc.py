@@ -32,6 +32,8 @@ TRANSPORT_CMDS = frozenset(
         "queue.play",
         "queue.move",
         "queue.remove",
+        "queue.clear_upcoming",
+        "queue.undo",
     }
 )
 

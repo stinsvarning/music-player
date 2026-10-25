@@ -201,7 +201,18 @@ def song_menu_actions(source: str, *, row: int = -1, current: int = -1, total: i
     if row < 0 or row != total - 1:
         actions.append("Move to bottom")
     actions.extend(["Start mix", "Save this track…", "Save entire queue…", "Remove"])
+    if row < 0 or current + 1 < total:
+        actions.append("Clear upcoming")
     return actions
+
+
+# Footer note after an undoable queue edit, keyed by the engine command.
+UNDO_NOTES = {
+    "queue.remove": "Removed",
+    "track.mix": "Mix started",
+    "playlist.mix": "Mix started",
+    "queue.clear_upcoming": "Cleared upcoming",
+}
 
 
 def play_next_target(row: int, current: int) -> int:

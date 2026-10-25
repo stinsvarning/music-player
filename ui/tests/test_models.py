@@ -303,8 +303,12 @@ class SongMenuTests(unittest.TestCase):
     def test_queue_rows_get_move_actions(self):
         self.assertEqual(
             song_menu_actions("queue", row=4, current=1, total=8),
-            ["Play next", "Move to top", "Move to bottom", "Start mix", "Save this track…", "Save entire queue…", "Remove"],
+            ["Play next", "Move to top", "Move to bottom", "Start mix", "Save this track…", "Save entire queue…", "Remove", "Clear upcoming"],
         )
+
+    def test_clear_upcoming_only_when_something_follows(self):
+        self.assertNotIn("Clear upcoming", song_menu_actions("queue", row=2, current=7, total=8))
+        self.assertIn("Clear upcoming", song_menu_actions("queue", row=7, current=2, total=8))
 
     def test_queue_drops_moves_that_would_do_nothing(self):
         playing = song_menu_actions("queue", row=1, current=1, total=8)

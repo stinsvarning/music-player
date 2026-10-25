@@ -176,6 +176,8 @@ class QueueViewMixin:
                 box.append(self._menu_button(label, lambda: self._show_save_queue_menu(pop, row, track, source)))
             elif label == "Remove":
                 box.append(self._menu_button(label, lambda: run(lambda: self._remove_from_queue(row.get_index()))))
+            elif label == "Clear upcoming":
+                box.append(self._menu_button(label, lambda: run(self._clear_upcoming)))
         pop.set_child(box)
 
     def _popup_song_menu(self, row: Gtk.ListBoxRow, track: Track, source: str) -> None:
@@ -262,6 +264,9 @@ class QueueViewMixin:
 
     def _add_to_queue(self, track: Track) -> None:
         self._queue_cmd({"cmd": "track.queue", "track": track.to_ipc()})
+
+    def _clear_upcoming(self) -> None:
+        self._queue_cmd({"cmd": "queue.clear_upcoming"})
 
     def _remove_from_queue(self, index: int) -> None:
         self._queue_cmd({"cmd": "queue.remove", "index": index})

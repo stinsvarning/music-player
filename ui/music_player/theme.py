@@ -530,6 +530,21 @@ def css_for(palette: Palette) -> str:
         .foot-note, .foot-progress, .foot-reconnect {{
             color: {palette.muted};
         }}
+        .undo-note {{
+            margin-end: 4px;
+        }}
+        button.undo-link {{
+            background: transparent;
+            color: {palette.accent};
+            border: none;
+            box-shadow: none;
+            min-height: 0;
+            padding: 0 2px;
+        }}
+        button.undo-link:hover {{
+            color: {palette.fg};
+            background: transparent;
+        }}
         .foot-error, .foot-offline, .foot-session {{
             color: {palette.peak};
         }}

@@ -345,10 +345,72 @@ class WindowChromeTests(unittest.TestCase):
         self.assertEqual(self.cmds[-1], {"cmd": "queue.move", "from": 0, "to": 4})
         self.assertEqual(self.win.queue_list.get_selected_row().get_index(), 4)
 
+    def test_ctrl_z_sends_undo(self):
+        self.cmds.clear()
+        self.assertTrue(self._key(Gdk.KEY_z, ctrl=True))
+        self.assertEqual(self.cmds[-1], {"cmd": "queue.undo"})
+
+    def test_ctrl_z_in_the_find_box_stays_with_the_entry(self):
+        self.win.search_entry.has_focus = lambda: True  # a headless window never gets real focus
+        self.cmds.clear()
+        self.assertFalse(self._key(Gdk.KEY_z, ctrl=True))
+        self.assertEqual(self.cmds, [])
+
+    def test_undoable_edits_show_a_quiet_undo_note(self):
+        self.assertFalse(self.win.undo_note.get_visible())
+        self.win._after_queue_edit("queue.remove", {"ok": True})
+        self.assertTrue(self.win.undo_note.get_visible())
+        self.assertEqual(self.win.undo_label.get_text(), "Removed ·")
+        self.assertEqual(self.win.undo_button.get_label(), "Undo")
+        self.win._after_queue_edit("track.mix", {"ok": True})
+        self.assertEqual(self.win.undo_label.get_text(), "Mix started ·")
+        self.win._after_queue_edit("queue.clear_upcoming", {"ok": True, "removed": 4})
+        self.assertEqual(self.win.undo_label.get_text(), "Cleared upcoming ·")
+        self.cmds.clear()
+        self.win.undo_button.emit("clicked")
+        self.assertEqual(self.cmds[-1], {"cmd": "queue.undo"})
+        self.assertFalse(self.win.undo_note.get_visible())
+
+    def test_the_undo_note_fades_away(self):
+        from music_player import footer
+
+        self.win._after_queue_edit("queue.remove", {"ok": True})
+        self.assertTrue(self.win._undo_hold)
+        GLib.source_remove(self.win._undo_hold)
+        self.win._undo_hold = 0
+        old = footer.UNDO_FADE_MS
+        footer.UNDO_FADE_MS = 80
+        try:
+            self.win._fade_undo_note()
+            ctx = GLib.MainContext.default()
+            deadline = time.monotonic() + 2
+            while self.win.undo_note.get_visible() and time.monotonic() < deadline:
+                ctx.iteration(False)
+                time.sleep(0.01)
+        finally:
+            footer.UNDO_FADE_MS = old
+        self.assertFalse(self.win.undo_note.get_visible())
+
+    def test_clearing_nothing_and_undo_are_plain_notes(self):
+        self.win._after_queue_edit("queue.clear_upcoming", {"ok": True, "removed": 0})
+        self.assertFalse(self.win.undo_note.get_visible())
+        self.assertEqual(self.win.status_label.get_text(), "nothing after this track")
+        self.win._after_queue_edit("queue.undo", {"ok": True, "undone": "Removed"})
+        self.assertEqual(self.win.status_label.get_text(), "undone")
+        self.assertTrue(self.win.status_label.has_css_class("foot-note"))
+
+    def test_queue_menu_clear_upcoming(self):
+        tracks = self._queue_of(4, current=1)
+        self.win._popup_song_menu(self.win.queue_list.get_row_at_index(0), tracks[0], "queue")
+        self.cmds.clear()
+        self._click_menu("Clear upcoming")
+        self.assertEqual(self.cmds[-1], {"cmd": "queue.clear_upcoming"})
+
     def test_key_card_lists_queue_moves(self):
         from music_player.keys import HELP_LINES
 
         self.assertTrue(any(line.startswith("alt+up") for line in HELP_LINES))
+        self.assertTrue(any(line.startswith("ctrl+z") for line in HELP_LINES))
 
     def test_no_thumbs_down_control(self):
         self.assertFalse(hasattr(self.win, "btn_dislike"))

@@ -130,6 +130,7 @@ class PlayerWindow(
         if self._footer_timer:
             GLib.source_remove(self._footer_timer)
             self._footer_timer = 0
+        self._stop_undo_timers()
         if self._pos_timer:
             GLib.source_remove(self._pos_timer)
             self._pos_timer = 0

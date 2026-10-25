@@ -14,8 +14,52 @@ from gi.repository import GLib, Gtk
 from .models import footer_kind, is_login_error, lyric_lines, playback_word
 
 
+UNDO_NOTE_SECONDS = 6.0
+UNDO_FADE_MS = 600
+
+
 class FooterMixin:
     """PlayerWindow methods; state lives on the window (see PlayerWindow.__init__)."""
+
+    def _show_undo_note(self, label: str) -> None:
+        """Quiet "<label> · Undo" at the right of the footer; fades after a few seconds."""
+        self._stop_undo_timers()
+        self.undo_label.set_text(f"{label} ·")
+        self.undo_note.set_opacity(1.0)
+        self.undo_note.set_visible(True)
+        self._undo_hold = GLib.timeout_add(int(UNDO_NOTE_SECONDS * 1000), self._fade_undo_note)
+
+    def _fade_undo_note(self) -> bool:
+        self._undo_hold = 0
+        start = time.monotonic()
+
+        def step() -> bool:
+            left = 1.0 - (time.monotonic() - start) * 1000 / UNDO_FADE_MS
+            if left <= 0:
+                self._undo_fade = 0
+                self._hide_undo_note()
+                return False
+            self.undo_note.set_opacity(left)
+            return True
+
+        self._undo_fade = GLib.timeout_add(40, step)
+        return False
+
+    def _hide_undo_note(self) -> None:
+        self._stop_undo_timers()
+        self.undo_note.set_visible(False)
+        self.undo_note.set_opacity(1.0)
+
+    def _stop_undo_timers(self) -> None:
+        for name in ("_undo_hold", "_undo_fade"):
+            src = getattr(self, name, 0)
+            if src:
+                GLib.source_remove(src)
+            setattr(self, name, 0)
+
+    def _undo(self) -> None:
+        self._hide_undo_note()
+        self._queue_cmd({"cmd": "queue.undo"})
 
     def _show_notice(self, text: str, seconds: float = 6.0) -> None:
         self._notice = (text or "").strip()
