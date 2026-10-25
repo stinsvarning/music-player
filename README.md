@@ -24,7 +24,7 @@ Version 0.2.0. Unofficial, and not affiliated with Google or YouTube. It uses th
 - **Your library.** Search songs, browse your playlists, and like the current track (it shows up in Liked Music). Premium audio quality is used when the browser session has Premium.
 - **Queue.** Drag to reorder, Delete to remove a row, and save one track or the whole queue to a new or existing playlist. Right-click a track to play it next, add it to the queue or start a mix. Right-click a playlist to start a mix, rename it or delete it.
 - **Playback.** Gapless: the next stream is already queued in mpv when a track ends. Shuffle, repeat (all or one), play similar when the queue runs out, and a sleep timer.
-- **Visualizer.** Three looks: bricks, wave and waterfall. Click the visualizer to cycle through them. It fills the LCD strip and the area around the deck, is capped at 60 fps, and its intensity follows the player volume.
+- **Visualizer.** Three looks: bricks, wave and waterfall, plus off. Click the visualizer to cycle bricks → wave → waterfall → off. The player remembers your choice across restarts. It fills the LCD strip and the area around the deck, is capped at 60 fps, and its intensity follows the player volume. Off leaves a still, dark grid and also stops the audio analysis behind it, so it costs next to nothing.
 - **Omarchy theme.** Colours come from the current Omarchy theme and repaint live when you switch themes. Accent and peak colours can be overridden in the config.
 - **Fits any tile.** The deck keeps its full size on a large screen and shrinks to fit a half-screen or short tile.
 - **Desktop integration.** MPRIS, so media keys and other players' controls work. An optional Omarchy bar widget shows the current track and opens the window.
@@ -115,8 +115,9 @@ Everything is optional. The file is `~/.config/music-player/config.toml`:
 cookies_from = "auto"
 # cookies_from = "firefox:~/.config/zen"
 
-# Visualizer look: bricks, wave or waterfall. Clicking the visualizer updates this,
-# and a hand edit is picked up without a restart.
+# Visualizer look: bricks, wave, waterfall or off. The look you last clicked is
+# remembered by the player and wins over this line at startup. Editing the line
+# applies it without a restart, and it becomes the remembered look.
 vis_mode = "bricks"
 
 # Override the theme's accent and peak colours.
@@ -146,6 +147,7 @@ It's light on memory and close to free when idle. While playing, it uses about a
 | | Playing, window visible | Playing, window hidden | Idle | Memory (PSS / RSS) | Processes |
 |---|---|---|---|---|---|
 | **music-player** (wave / bricks / waterfall) | 7.2% / 6.1% / 4.5% | 2.9% | 0.4% | ~210 MB / ~335 MB | 3 |
+| music-player, visualizer off | 1.0% | 0.8% | 0.4% | same as above | 3 |
 | music.youtube.com in Chromium | 3.6% | 2.3% | 8.8% | ~640 MB / ~1.3 GB | 13 |
 | Pear Desktop 3.12 (Electron) | 5.5% | 1.8% | 8.6% | ~570 MB / ~1.1 GB | 8 |
 | mpv alone (no window, no visualizer) | 0.5% | 0.5% | — | ~59 MB / ~90 MB | 1 |
@@ -153,13 +155,14 @@ It's light on memory and close to free when idle. While playing, it uses about a
 CPU is a percentage of **one** core, averaged over 60 s and summed over every process involved. Memory is summed too; PSS counts shared pages once.
 
 - **When the window is hidden** (another workspace), nothing is drawn. What's left is mpv decoding plus the visualizer's band analysis.
+- **With the visualizer off**, the band analysis stops too, so playback costs about what mpv alone does.
 - **Idle** means the window open with nothing playing. The web player keeps animating its home page, so it doesn't idle down.
 - **Window size** barely matters: a half-screen and a near-maximized window cost the same.
 
 <details>
 <summary>How this was measured</summary>
 
-Measured on 2026-10-25 on an Intel Core Ultra 9 285K (24 cores, integrated graphics) running Arch/Omarchy, Hyprland 0.56, GTK 4.24 and mpv 0.41. Every player played the same 5:45 track. Each figure is the median of two fresh launches. "Visible" means the window was drawn by a headless 60 Hz gamescope compositor at 3840×1600. "Hidden" means it was on a workspace not being shown. Audio output was disabled for every candidate (`--ao=null` for mpv, `--mute-audio --disable-audio-output` for Chromium and Pear), so the audio server's own cost isn't counted. GPU use wasn't measured. music-player ran signed in; Chromium and Pear ran signed out, with ads. The Chromium and Pear numbers come from the same session, before the visualizer optimisations in `de1b5a3`.
+Measured on 2026-10-25 on an Intel Core Ultra 9 285K (24 cores, integrated graphics) running Arch/Omarchy, Hyprland 0.56, GTK 4.24 and mpv 0.41. Every player played the same 5:45 track. Each figure is the median of two fresh launches. "Visible" means the window was drawn by a headless 60 Hz gamescope compositor at 3840×1600. "Hidden" means it was on a workspace not being shown. Audio output was disabled for every candidate (`--ao=null` for mpv, `--mute-audio --disable-audio-output` for Chromium and Pear), so the audio server's own cost isn't counted. GPU use wasn't measured. music-player ran signed in; Chromium and Pear ran signed out, with ads. The Chromium and Pear numbers come from the same session, before the visualizer optimisations in `de1b5a3`. The visualizer-off row was measured later the same day in a separate session, side by side with wave (wave measured 7.9% visible and 3.1% hidden there).
 
 </details>
 
