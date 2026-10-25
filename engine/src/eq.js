@@ -28,6 +28,15 @@ export function preampFor(gains) {
   return peak > 0 ? -peak : 0;
 }
 
+// The window reads one value per band every 80 ms (BAND_INTERVAL), but mpv hands the
+// filters ~20 ms frames, so three of every four astats results were never read.
+// Each tap still filters every sample (the bandpass keeps its state), then only
+// every fourth frame is measured: the same per-frame RMS values, a quarter of the work.
+export const VIS_TAP_EVERY = 4;
+const VIS_TAP_SELECT = `not(mod(n\\,${VIS_TAP_EVERY}))`;
+// Only the overall RMS is read; astats skips the other measures' output and metadata.
+const VIS_TAP_STATS = "metadata=1:reset=1:length=0.08:measure_perchannel=none:measure_overall=RMS_level";
+
 export function lavfiEqualizer(gains, metaDir = "") {
   const stages = [];
   const pre = preampFor(gains);
@@ -35,9 +44,13 @@ export function lavfiEqualizer(gains, metaDir = "") {
     stages.push(`volume=${pre}dB`);
   }
   for (let i = 0; i < BANDS_HZ.length; i += 1) {
-    stages.push(`equalizer=f=${BANDS_HZ[i]}:t=q:w=1.2:g=${Number(gains[i] ?? 0)}`);
+    const g = Number(gains[i] ?? 0);
+    // A 0 dB band is a no-op biquad; skipping it saves ten filters on the Flat preset.
+    if (g) {
+      stages.push(`equalizer=f=${BANDS_HZ[i]}:t=q:w=1.2:g=${g}`);
+    }
   }
-  const eq = stages.join(",");
+  const eq = stages.length ? stages.join(",") : "anull";
   if (!metaDir) {
     return `lavfi=[${eq}]`;
   }
@@ -46,7 +59,8 @@ export function lavfiEqualizer(gains, metaDir = "") {
     const dest = escapeLavfiPath(spectrumBandFile(metaDir, i));
     return (
       `[s${i}]bandpass=f=${hz}:width_type=q:w=1.2,` +
-      `astats=metadata=1:reset=1:length=0.08,` +
+      `aselect=${VIS_TAP_SELECT},` +
+      `astats=${VIS_TAP_STATS},` +
       `ametadata=mode=print:file='${dest}':key=lavfi.astats.Overall.RMS_level:direct=1,` +
       `anullsink`
     );

@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
+import { lavfiEqualizer, parseAmetadataLog, spectrumBandFile, VIS_BANDS_HZ } from "../src/eq.js";
 import { Mpv } from "../src/mpv.js";
 
 test("mpv plays a local file and seeks absolutely", async () => {
@@ -34,6 +35,43 @@ test("mpv plays a local file and seeks absolutely", async () => {
     assert.ok(pos >= 1.7 && pos <= 3.0, `expected ~2s, got ${pos}`);
   } finally {
     await mpv.quit();
+  }
+});
+
+test("the spectrum taps run in mpv and write per-band RMS", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mpv-test-"));
+  const wav = path.join(dir, "tone.wav");
+  const spec = path.join(dir, "spectrum");
+  fs.mkdirSync(spec);
+  const made = spawnSync(
+    "ffmpeg",
+    ["-y", "-f", "lavfi", "-i", "sine=f=1000:r=48000", "-ac", "2", "-t", "4", wav],
+    { encoding: "utf8" },
+  );
+  assert.equal(made.status, 0, made.stderr);
+  const mpv = new Mpv(path.join(dir, "mpv.sock"), { extraArgs: ["--ao=null"] }); // tests never make sound
+  await mpv.start();
+  try {
+    await mpv.setAf(lavfiEqualizer([0, 0, 0, 0, 0, 0, 0, 0, 0, 0], spec));
+    await mpv.load(wav);
+    await delay(300);
+    if (await mpv.get("pause")) {
+      await mpv.pause(false);
+    }
+    await delay(1500);
+    const rms = VIS_BANDS_HZ.map((_, i) => {
+      const text = fs.readFileSync(spectrumBandFile(spec, i), "utf8");
+      return Number(parseAmetadataLog(text)["lavfi.astats.Overall.RMS_level"]);
+    });
+    // a 1 kHz tone: loudest in the band around 1 kHz, far quieter at the edges
+    const loudest = rms.indexOf(Math.max(...rms));
+    assert.equal(VIS_BANDS_HZ[loudest], 1116, rms.join(" "));
+    assert.ok(rms[0] < rms[loudest] - 20 && rms[9] < rms[loudest] - 20, rms.join(" "));
+    const frames = fs.readFileSync(spectrumBandFile(spec, 5), "utf8").split("\n").filter((l) => l.startsWith("frame:"));
+    assert.ok(frames.length >= 3, `few measured frames: ${frames.length}`);
+  } finally {
+    await mpv.quit();
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
