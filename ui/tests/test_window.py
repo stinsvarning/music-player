@@ -234,6 +234,19 @@ class WindowChromeTests(unittest.TestCase):
         self.assertAlmostEqual(self.win.spectrum.state.intensity, 1.0)
         self.assertAlmostEqual(self.win.field.state.intensity, 1.0)
 
+    def test_pushed_status_drives_the_clock_between_updates(self):
+        base = {"ok": True, "event": "status", "duration": 200, "volume": 50, "track": {"id": "t1", "title": "One"}}
+        self.win._on_status({**base, "state": "playing", "position": 10.0})
+        self.assertTrue(self.win._playing_hint)
+        self.assertTrue(self.win._pos_timer)
+        self.assertEqual(self.win.track_title.get_text(), "One")
+        self.win._pos_base = (10.0, time.monotonic() - 3.0)
+        self.assertTrue(self.win._tick_position())
+        self.assertEqual(self.win.pos_label.get_text(), "0:13")
+        self.win._on_status({**base, "state": "paused", "position": 14.0})
+        self.assertFalse(self.win._playing_hint)
+        self.assertEqual(self.win._pos_timer, 0)
+
     def test_hand_edited_vis_mode_applies_live(self):
         self._cfg.write_text('vis_mode = "orbit"\n')
         self.win._reload_config()

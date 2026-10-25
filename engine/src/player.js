@@ -35,8 +35,25 @@ export class Player {
     this._bands = Array(VIS_BANDS_HZ.length).fill(0);
     this._bandsUntil = 0;
     this._bandsTimer = null;
+    this._changeListeners = new Set();
     if (typeof this.mpv?.onEvent === "function") {
       this.mpv.onEvent((ev) => this.#onMpvEvent(ev));
+    }
+  }
+
+  /** Subscribe to "something a client would show changed". Returns an unsubscribe fn. */
+  onChange(fn) {
+    this._changeListeners.add(fn);
+    return () => this._changeListeners.delete(fn);
+  }
+
+  notifyChange(reason = "") {
+    for (const fn of this._changeListeners) {
+      try {
+        fn(reason);
+      } catch {
+        /* a listener must not break playback */
+      }
     }
   }
 
@@ -120,7 +137,10 @@ export class Player {
     }
   }
 
-  #saveSession() {
+  #saveSession({ quiet = false } = {}) {
+    if (!quiet) {
+      this.notifyChange("state");
+    }
     if (this._restoring || !this.persist) {
       return;
     }
@@ -370,6 +390,7 @@ export class Player {
     }
     await this.mpv.pause(false);
     this.state = "playing";
+    this.notifyChange("play");
   }
 
   async pause() {
@@ -791,10 +812,13 @@ export class Player {
       return;
     }
     this._lastPosSave = now;
-    this.#saveSession();
+    this.#saveSession({ quiet: true }); // position only: clients interpolate it
   }
 
   #onMpvEvent(ev) {
+    if (ev && MPV_CHANGE_EVENTS.has(ev.event)) {
+      this.notifyChange(`mpv:${ev.event}${ev.name ? `:${ev.name}` : ""}`);
+    }
     if (!ev || ev.event !== "end-file") {
       return;
     }
@@ -841,6 +865,9 @@ export class Player {
     return url;
   }
 }
+
+// mpv events that change what status() reports (observed properties arrive as property-change).
+const MPV_CHANGE_EVENTS = new Set(["file-loaded", "end-file", "playback-restart", "seek", "pause", "unpause", "idle", "property-change"]);
 
 function readSpectrumBands(dir) {
   const bands = [];

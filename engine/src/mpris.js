@@ -187,10 +187,35 @@ export async function startMpris(player, { onQuit } = {}) {
       /* player busy */
     }
   };
-  const timer = setInterval(tick, 500);
+  // Change-driven: the player says when something changed; a slow tick keeps
+  // Position fresh while playing and catches anything missed.
+  let dirty = true;
+  let soon = null;
+  const offChange =
+    typeof player.onChange === "function"
+      ? player.onChange(() => {
+          dirty = true;
+          if (!soon) {
+            soon = setTimeout(() => {
+              soon = null;
+              dirty = false;
+              tick();
+            }, 60);
+            soon.unref?.();
+          }
+        })
+      : null;
+  const timer = setInterval(() => {
+    if (dirty || player.state === "playing" || typeof player.onChange !== "function") {
+      dirty = false;
+      tick();
+    }
+  }, 1000);
+  timer.unref?.();
   await tick();
   return () => {
     clearInterval(timer);
+    offChange?.();
     try {
       bus.disconnect();
     } catch {

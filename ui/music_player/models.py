@@ -422,3 +422,24 @@ def parse_playlists(payload: dict[str, Any] | list) -> list[PlaylistInfo]:
             )
         )
     return out
+
+
+def pump_intervals(playing: bool, subscribed: bool) -> tuple[float, float]:
+    """(bands, status) poll periods in seconds.
+
+    The meter needs bands at the engine's 80 ms rate only while playing. Status is
+    pushed once subscribed, so polling it is just a slow safety net; an older engine
+    without subscribe gets the old 250 ms poll.
+    """
+    bands = 0.08 if playing else 1.0
+    status = 5.0 if subscribed else 0.25
+    return bands, status
+
+
+def interpolate_position(base: tuple[float, float], now: float, duration: float) -> float:
+    """Position now, from (position, time it was reported) while playing."""
+    pos, at = base
+    out = float(pos) + max(0.0, float(now) - float(at))
+    if duration and duration > 0:
+        out = min(out, float(duration))
+    return out

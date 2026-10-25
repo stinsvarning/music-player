@@ -4,7 +4,7 @@ import json
 import socket
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 class EngineError(RuntimeError):
@@ -126,3 +126,50 @@ class EngineIPC:
         if not line.strip():
             raise EngineError("empty engine response")
         return json.loads(line.decode())
+
+    def subscribe(self, on_event: Callable[[dict[str, Any]], None], stop: threading.Event, *, timeout: float = 5.0) -> str:
+        """Stream engine-pushed status on a dedicated connection until `stop` or the link drops.
+
+        Calls on_event with the ack (current status, "subscribed": true) and then with
+        every {"event": "status", ...} line. Returns "unsupported" when the engine does
+        not know subscribe (an older engine), "closed" when the engine hung up, and
+        "stopped" when asked to stop. Connection failures raise OSError.
+        """
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            sock.settimeout(timeout)
+            sock.connect(self.socket_path)
+            sock.sendall(b'{"cmd":"subscribe"}\n')
+            buf = b""
+            while b"\n" not in buf:
+                chunk = sock.recv(65536)
+                if not chunk:
+                    return "closed"
+                buf += chunk
+            line, buf = buf.split(b"\n", 1)
+            ack = json.loads(line.decode() or "{}")
+            if not ack.get("ok") or not ack.get("subscribed"):
+                return "unsupported"
+            on_event(ack)
+            sock.settimeout(0.5)
+            while not stop.is_set():
+                while b"\n" in buf:
+                    line, buf = buf.split(b"\n", 1)
+                    if line.strip():
+                        try:
+                            on_event(json.loads(line.decode()))
+                        except ValueError:
+                            continue
+                try:
+                    chunk = sock.recv(65536)
+                except socket.timeout:
+                    continue
+                if not chunk:
+                    return "closed"
+                buf += chunk
+            return "stopped"
+        finally:
+            try:
+                sock.close()
+            except OSError:
+                pass

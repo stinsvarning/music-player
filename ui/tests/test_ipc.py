@@ -14,6 +14,8 @@ class LineServer:
         self.dir = tempfile.mkdtemp()
         self.path = str(Path(self.dir) / "engine.sock")
         self.accepts = 0
+        self.stream: list[dict] | None = None  # set to make "subscribe" answer with these events
+        self.hold = False  # keep the subscribe stream open after the events
         self._stop = threading.Event()
         self._sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self._sock.bind(self.path)
@@ -46,6 +48,15 @@ class LineServer:
                     line, buf = buf.split(b"\n", 1)
                     req = json.loads(line.decode())
                     if req.get("cmd") == "drop":
+                        conn.close()
+                        return
+                    if req.get("cmd") == "subscribe" and self.stream is not None:
+                        conn.sendall((json.dumps({"ok": True, "subscribed": True, "state": "paused"}) + "\n").encode())
+                        for ev in self.stream:
+                            time.sleep(0.02)
+                            conn.sendall((json.dumps(ev) + "\n").encode())
+                        while self.hold and not self._stop.is_set():
+                            time.sleep(0.02)
                         conn.close()
                         return
                     time.sleep(float(req.get("delay") or 0))
@@ -135,3 +146,42 @@ class EngineIPCTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SubscribeTests(unittest.TestCase):
+    def tearDown(self) -> None:
+        self.server.close()
+
+    def test_streams_ack_then_events_until_the_engine_hangs_up(self):
+        self.server = LineServer()
+        self.server.stream = [{"ok": True, "event": "status", "state": "playing"}, {"ok": True, "event": "status", "state": "paused"}]
+        got = []
+        result = EngineIPC(self.server.path, timeout=2).subscribe(got.append, threading.Event())
+        self.assertEqual(result, "closed")
+        self.assertEqual([g.get("state") for g in got], ["paused", "playing", "paused"])
+        self.assertTrue(got[0]["subscribed"])
+        self.assertEqual(got[1]["event"], "status")
+
+    def test_older_engine_is_reported_unsupported(self):
+        self.server = LineServer()  # echoes, no "subscribed"
+        got = []
+        self.assertEqual(EngineIPC(self.server.path, timeout=2).subscribe(got.append, threading.Event()), "unsupported")
+        self.assertEqual(got, [])
+
+    def test_stop_ends_an_open_stream(self):
+        self.server = LineServer()
+        self.server.stream = []
+        self.server.hold = True
+        stop = threading.Event()
+        out = {}
+        t = threading.Thread(target=lambda: out.setdefault("r", EngineIPC(self.server.path, timeout=2).subscribe(lambda _e: None, stop)))
+        t.start()
+        time.sleep(0.2)
+        stop.set()
+        t.join(2)
+        self.assertEqual(out.get("r"), "stopped")
+
+    def test_missing_engine_raises_oserror(self):
+        self.server = LineServer()
+        with self.assertRaises(OSError):
+            EngineIPC(self.server.path + ".missing", timeout=1).subscribe(lambda _e: None, threading.Event())

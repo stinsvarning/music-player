@@ -4,12 +4,34 @@ import net from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
 
 export class Mpv {
-  constructor(socketPath) {
+  constructor(socketPath, { extraArgs = [] } = {}) {
     this.socketPath = socketPath;
+    this.extraArgs = [...extraArgs];
     this.proc = null;
     this.requestId = 1;
     this._listeners = new Set();
     this._eventSock = null;
+    this._observed = [];
+  }
+
+  /** Ask mpv to report these properties as property-change events on the event socket. */
+  observe(names) {
+    for (const name of names || []) {
+      if (!this._observed.includes(name)) {
+        this._observed.push(name);
+      }
+    }
+    this.#sendObserves();
+  }
+
+  #sendObserves() {
+    const sock = this._eventSock;
+    if (!sock || sock.destroyed) {
+      return;
+    }
+    this._observed.forEach((name, i) => {
+      sock.write(`${JSON.stringify({ command: ["observe_property", 100 + i, name] })}\n`);
+    });
   }
 
   onEvent(fn) {
@@ -35,6 +57,7 @@ export class Mpv {
         "--force-seekable=yes",
         "--load-scripts=no",
         `--input-ipc-server=${this.socketPath}`,
+        ...this.extraArgs,
       ],
       { stdio: ["ignore", "ignore", "pipe"] },
     );

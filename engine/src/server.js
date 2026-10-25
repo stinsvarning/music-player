@@ -9,7 +9,7 @@ function videoIdOf(req) {
   return String(req?.id || req?.track?.id || "").trim();
 }
 
-function createIpcServer(handler) {
+function createIpcServer(handler, { onSubscribe } = {}) {
   return net.createServer((sock) => {
     let buf = "";
     let chain = Promise.resolve();
@@ -24,7 +24,13 @@ function createIpcServer(handler) {
           .then(async () => {
             let resp;
             try {
-              resp = parsed.ok ? await handler(parsed.request) : fail(parsed.error);
+              if (parsed.ok && parsed.request.cmd === "subscribe") {
+                // The socket becomes an event stream: an ack with the current status,
+                // then one {"event":"status",...} line per change.
+                resp = onSubscribe ? ok({ subscribed: true, ...(await onSubscribe(sock, parsed.request)) }) : fail("subscribe is not supported");
+              } else {
+                resp = parsed.ok ? await handler(parsed.request) : fail(parsed.error);
+              }
             } catch (err) {
               resp = fail(err.message || err);
             }
@@ -56,12 +62,12 @@ function bindUnix(server, socketPath) {
   });
 }
 
-export async function listen(socketPath, handler) {
+export async function listen(socketPath, handler, opts = {}) {
   if (await pingEngine(socketPath)) {
     throw new Error("engine already listening");
   }
   try {
-    const server = await bindUnix(createIpcServer(handler), socketPath);
+    const server = await bindUnix(createIpcServer(handler, opts), socketPath);
     fs.chmodSync(socketPath, 0o600);
     return server;
   } catch (err) {
@@ -76,7 +82,7 @@ export async function listen(socketPath, handler) {
     } catch {
       /* missing is fine */
     }
-    const server = await bindUnix(createIpcServer(handler), socketPath);
+    const server = await bindUnix(createIpcServer(handler, opts), socketPath);
     fs.chmodSync(socketPath, 0o600);
     return server;
   }
