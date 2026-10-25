@@ -10,12 +10,14 @@ import {
   lavfiEqualizer,
   parseAmetadataLog,
   preampFor,
+  VIS_TAP_EVERY,
 } from "../src/eq.js";
 
-test("equalizer graph is ten bands", () => {
+test("equalizer graph is ten bands, skipping the ones at 0 dB", () => {
   assert.equal(BANDS_HZ.length, 10);
-  const graph = lavfiEqualizer([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
-  assert.equal([...graph.matchAll(/equalizer=/g)].length, 10);
+  assert.equal([...lavfiEqualizer([1, 1, 1, 1, 1, 1, 1, 1, 1, 1]).matchAll(/equalizer=/g)].length, 10);
+  assert.equal([...lavfiEqualizer([0, 2, 0, -1, 0, 0, 0, 0, 0, 0]).matchAll(/equalizer=/g)].length, 2);
+  assert.equal(lavfiEqualizer([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]), "lavfi=[anull]");
 });
 
 test("YTM presets are modest and named for listening, not genre theater", () => {
@@ -45,14 +47,29 @@ test("lavfi graph inserts a preamp before the equalizer when bands boost", () =>
 });
 
 test("lavfi graph keeps the equalizer and adds a spectrum tap", () => {
-  const graph = lavfiEqualizer([0, 0, 0, 0, 0, 0, 0, 0, 0, 0], "/tmp/spectrum");
+  const graph = lavfiEqualizer([3, 0, 0, 0, 0, 0, 0, 0, 0, 0], "/tmp/spectrum");
   assert.match(graph, /^lavfi=\[/);
   assert.match(graph, /equalizer=f=60/);
+  assert.match(lavfiEqualizer(PRESETS.Flat, "/tmp/spectrum"), /\[main\]anull\]$/);
   assert.match(graph, /astats=metadata=1/);
   assert.match(graph, /anullsink/);
   assert.match(graph, /ametadata=mode=print:file='\/tmp\/spectrum\/0'/);
   assert.match(graph, new RegExp(`bandpass=f=${VIS_BANDS_HZ[0]}`));
   assert.doesNotMatch(graph, /bandpass=f=12000/);
+});
+
+test("spectrum taps filter every sample but only measure the frames the window reads", () => {
+  const graph = lavfiEqualizer(PRESETS.Flat, "/tmp/spectrum");
+  const taps = graph.split(";").filter((part) => part.includes("bandpass="));
+  assert.equal(taps.length, VIS_BANDS_HZ.length);
+  for (const tap of taps) {
+    // bandpass first (it is stateful), then the frame pick, then the RMS-only stats
+    assert.ok(tap.indexOf("bandpass=") < tap.indexOf("aselect="), tap);
+    assert.ok(tap.indexOf("aselect=") < tap.indexOf("astats="), tap);
+    assert.match(tap, new RegExp(`aselect=not\\(mod\\(n\\\\,${VIS_TAP_EVERY}\\)\\)`));
+    assert.match(tap, /measure_perchannel=none:measure_overall=RMS_level/);
+  }
+  assert.equal(VIS_TAP_EVERY, 4); // 4 x ~20 ms mpv frames = the window's 80 ms poll
 });
 
 test("visualizer bands are log spaced and separate from the equalizer", () => {

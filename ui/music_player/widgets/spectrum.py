@@ -46,7 +46,15 @@ class SpectrumView(Gtk.DrawingArea):
         click = Gtk.GestureClick()
         click.connect("released", self._on_click)
         self.add_controller(click)
-        self.add_tick_callback(self._on_tick)
+        self._tick_id = 0
+        self._wake()
+
+    def _wake(self) -> None:
+        """Run the per-frame animation; it removes itself again once everything settles,
+        so a paused or stopped player does not keep the frame clock running."""
+        if not self._tick_id:
+            self._last_frame = 0
+            self._tick_id = self.add_tick_callback(self._on_tick)
 
     def set_mode(self, mode: str) -> None:
         self.mode = normalize_vis(mode)
@@ -66,6 +74,7 @@ class SpectrumView(Gtk.DrawingArea):
         if any(v > 1e-3 for v in self._bands) and not self._awake:
             self._awake = True
             self._pacer.reset()
+            self._wake()
         if self.mode == "waterfall":
             self.queue_draw()
 
@@ -74,7 +83,8 @@ class SpectrumView(Gtk.DrawingArea):
         dt = (now - self._last_frame) / 1_000_000 if self._last_frame else 0.0
         self._last_frame = now
         if not self._awake:
-            return True
+            self._tick_id = 0
+            return False  # removed; set_bands adds it back when sound returns
         step = self._pacer.step(dt)
         if step is None:
             return True  # skip this refresh; the next one catches up the time
