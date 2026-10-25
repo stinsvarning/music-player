@@ -355,8 +355,31 @@ def css_for(palette: Palette) -> str:
         .deck {{
             background: {palette.bg};
             border: 1px solid {mix_hex(palette.bg, palette.muted, 0.45)};
-            min-width: 1180px;
-            min-height: 800px;
+        }}
+        /* Short tiles (fit_deck compact): tighter bars and a smaller LCD. */
+        .deck.deck-compact .deck-bar, .deck.deck-compact .foot {{
+            padding: 4px 14px;
+            min-height: 28px;
+        }}
+        .deck.deck-compact .lcd {{
+            padding: 10px 18px 6px;
+        }}
+        .deck.deck-compact .marquee {{
+            font-size: 26px;
+        }}
+        .deck.deck-compact .clock {{
+            font-size: 22px;
+        }}
+        .deck.deck-compact .transport {{
+            padding: 6px 16px;
+        }}
+        /* Thin tiles (fit_deck narrow): a tighter transport row. */
+        .deck.deck-narrow .transport {{
+            padding-left: 10px;
+            padding-right: 10px;
+        }}
+        .deck.deck-narrow button.tb {{
+            min-width: 36px;
         }}
         .vol-num {{
             color: {palette.accent};

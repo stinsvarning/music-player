@@ -126,11 +126,33 @@ class WindowChromeTests(unittest.TestCase):
         self.assertLessEqual(abs(after - before), 24)
 
     def test_deck_stays_at_design_size(self):
+        from music_player.layout import DECK_FRAME
         from music_player.window import DECK_H, DECK_W
 
-        self.assertEqual(self.win.deck.get_size_request(), (DECK_W, DECK_H))
+        self.assertEqual(self.win.deck.get_size_request(), (DECK_W + DECK_FRAME, DECK_H + DECK_FRAME))
         self.assertEqual((DECK_W, DECK_H), (1180, 800))
         self.assertFalse(hasattr(self.win, "_fit_deck"))
+
+    def test_deck_shrinks_in_small_tiles_and_returns_to_design_size(self):
+        from music_player.layout import DECK_FRAME
+        from music_player.window import DECK_H, DECK_W
+
+        self.win._on_stage_resize(None, 1280, 640)
+        self.win._apply_deck_mode()
+        self.assertEqual(self.win.deck.get_size_request(), (DECK_W + DECK_FRAME, 600))
+        self.assertIn("deck-compact", self.win.deck.get_css_classes())
+        self.win._on_stage_resize(None, 720, 540)
+        self.win._apply_deck_mode()
+        self.assertEqual(self.win.deck.get_size_request(), (720, 540))
+        self.assertIn("deck-narrow", self.win.deck.get_css_classes())
+        self.assertFalse(self.win.vol_lab.get_visible())
+        self.win._on_stage_resize(None, 3840, 1600)
+        self.win._apply_deck_mode()
+        self.assertEqual(self.win.deck.get_size_request(), (DECK_W + DECK_FRAME, DECK_H + DECK_FRAME))
+        self.assertNotIn("deck-compact", self.win.deck.get_css_classes())
+        self.assertNotIn("deck-narrow", self.win.deck.get_css_classes())
+        self.assertTrue(self.win.vol_lab.get_visible())
+        self.assertEqual(self.win.transport_box.get_spacing(), 10)
 
     def test_window_uses_hypr_chrome_not_gtk_csd(self):
         self.assertIsNone(self.win.get_titlebar())

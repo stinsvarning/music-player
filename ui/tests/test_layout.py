@@ -19,6 +19,34 @@ class DeckSizeTests(unittest.TestCase):
         self.assertFalse(hasattr(layout, "deck_size"))
         self.assertEqual((DECK_W, DECK_H), (1180, 800))
 
+    def test_big_windows_keep_the_exact_design_card(self):
+        full = (DECK_W + layout.DECK_FRAME, DECK_H + layout.DECK_FRAME)
+        for size in ((3840, 1600), (7680, 4320), (1920, 1600), (1900, 1080), (1232, 852)):
+            fit = layout.fit_deck(*size)
+            self.assertEqual((fit.width, fit.height), full, size)
+            self.assertFalse(fit.compact or fit.narrow, size)
+
+    def test_smaller_tiles_shrink_with_a_margin_then_fill(self):
+        fit = layout.fit_deck(1900, 800)
+        self.assertEqual((fit.width, fit.height), (1182, 752))
+        self.assertFalse(fit.compact)
+        fit = layout.fit_deck(1920, 640)
+        self.assertEqual(fit.height, 600)
+        self.assertTrue(fit.compact)
+        fit = layout.fit_deck(960, 1080)
+        self.assertEqual(fit.width, 912)
+        self.assertFalse(fit.narrow)
+        fit = layout.fit_deck(720, 540)
+        self.assertEqual((fit.width, fit.height), (720, 540))
+        self.assertTrue(fit.compact and fit.narrow)
+
+    def test_fit_never_exceeds_the_window_or_the_design(self):
+        for w in range(300, 4000, 97):
+            for h in range(200, 2000, 89):
+                fit = layout.fit_deck(w, h)
+                self.assertLessEqual(fit.width, min(w, DECK_W + layout.DECK_FRAME))
+                self.assertLessEqual(fit.height, min(h, DECK_H + layout.DECK_FRAME))
+
 
 class EllipsizeWidthTests(unittest.TestCase):
     def test_long_title_does_not_request_thousands_of_pixels(self):
