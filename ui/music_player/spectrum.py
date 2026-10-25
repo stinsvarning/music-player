@@ -279,18 +279,32 @@ def interpolate_smooth(bands: list[float], count: int) -> list[float]:
     pts = [float(b) for b in bands]
     last = len(pts) - 1
     out: list[float] = []
-    for i in range(count):
-        pos = i * last / (count - 1)
-        k = min(last - 1, int(pos))
-        f = pos - k
-        p0 = pts[max(0, k - 1)]
+    for k, f, f2 in _smooth_steps(last, count):
+        p0 = pts[k - 1 if k > 0 else 0]
         p1 = pts[k]
         p2 = pts[k + 1]
-        p3 = pts[min(last, k + 2)]
-        f2 = f * f
+        p3 = pts[k + 2 if k + 2 < last else last]
         v = 0.5 * (2 * p1 + (p2 - p0) * f + (2 * p0 - 5 * p1 + 4 * p2 - p3) * f2 + (3 * p1 - p0 - 3 * p2 + p3) * f2 * f)
-        out.append(clamp01(v))
+        out.append(0.0 if v <= 0.0 else 1.0 if v >= 1.0 else v)
     return out
+
+
+_SMOOTH_STEPS: dict[tuple[int, int], tuple] = {}
+
+
+def _smooth_steps(last: int, count: int) -> tuple:
+    """(segment, f, f*f) per output point; the same for every frame of a given width."""
+    key = (last, count)
+    hit = _SMOOTH_STEPS.get(key)
+    if hit is None:
+        steps = []
+        for i in range(count):
+            pos = i * last / (count - 1)
+            k = min(last - 1, int(pos))
+            f = pos - k
+            steps.append((k, f, f * f))
+        hit = _SMOOTH_STEPS[key] = tuple(steps)
+    return hit
 
 
 def brick_columns(bands: list[float], cols: int = BRICK_COLS, segs: int = BRICK_SEGS) -> list[int]:
@@ -356,12 +370,29 @@ def wave_heights(levels: list[float], cols: int, half_rows: int, phase: float = 
     curve = interpolate_smooth(levels, cols)
     swell = WAVE_RIPPLE * clamp01(energy * WAVE_ENERGY_GAIN)
     out: list[float] = []
+    # gate(v, 0.03, 0.75) inlined: this runs for every column on every frame
+    span = 1.0 - 0.03
+    angles = _ripple_angles(cols) if swell > 0 else None
     for c, v in enumerate(curve):
-        h = gate(v, 0.03, 0.75) * top
-        if swell > 0:
-            h += swell * math.sin(math.tau * WAVE_CYCLES * c / max(1, cols) - phase) * min(1.0, 0.35 + h / 2)
-        out.append(max(0.0, min(top, h)))
+        if v <= 0.03:
+            h = 0.0 * top
+        else:
+            g = (v - 0.03) / span
+            h = (0.0 if g <= 0.0 else 1.0 if g >= 1.0 else g) ** 0.75 * top
+        if angles is not None:
+            h += swell * math.sin(angles[c] - phase) * min(1.0, 0.35 + h / 2)
+        out.append(0.0 if h <= 0.0 else top if h >= top else h)
     return out
+
+
+_RIPPLE_ANGLES: dict[int, tuple[float, ...]] = {}
+
+
+def _ripple_angles(cols: int) -> tuple[float, ...]:
+    hit = _RIPPLE_ANGLES.get(cols)
+    if hit is None:
+        hit = _RIPPLE_ANGLES[cols] = tuple(math.tau * WAVE_CYCLES * c / max(1, cols) for c in range(cols))
+    return hit
 
 
 def waterfall_step(level: float, steps: int = WATERFALL_STEPS) -> int:
@@ -552,6 +583,7 @@ class LcdState:
         self.history: deque = deque(maxlen=WATERFALL_KEEP)
         self._wf = [0.0] * BAND_COUNT
         self.serial = 0  # bumps on every band update
+        self._trail_dots = None  # the painter's cache of the trail lines, keyed by serial
         self.intensity = 1.0  # from the volume slider, see volume_intensity
         self._dyn = Dynamics()
 
