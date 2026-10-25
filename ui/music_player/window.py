@@ -60,6 +60,7 @@ class PlayerWindow(
         self._palette = self._base_palette
         self._css = Gtk.CssProvider()
         self._queue: list[Track] = []
+        self._row_ids: list[str] = []  # ids of the queue rows currently built
         self._playlists: list[PlaylistInfo] = []
         self.browse = BrowseState()
         self._queue_sig = ""

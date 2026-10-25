@@ -25,6 +25,8 @@ from music_player.models import (
     playlist_is_editable,
     playlist_menu_actions,
     should_apply_engine_rating,
+    moved_index,
+    play_next_target,
     song_menu_actions,
     tracks_caption,
 )
@@ -295,14 +297,35 @@ class SongMenuTests(unittest.TestCase):
     def test_library_keeps_queue_actions(self):
         self.assertEqual(
             song_menu_actions("library"),
-            ["Start mix", "Play next", "Add to queue", "Save this track…"],
+            ["Play next", "Add to queue", "Start mix", "Save this track…"],
         )
 
-    def test_queue_drops_duplicate_queue_actions(self):
+    def test_queue_rows_get_move_actions(self):
         self.assertEqual(
-            song_menu_actions("queue"),
-            ["Start mix", "Save this track…", "Save entire queue…", "Remove"],
+            song_menu_actions("queue", row=4, current=1, total=8),
+            ["Play next", "Move to top", "Move to bottom", "Start mix", "Save this track…", "Save entire queue…", "Remove"],
         )
+
+    def test_queue_drops_moves_that_would_do_nothing(self):
+        playing = song_menu_actions("queue", row=1, current=1, total=8)
+        self.assertNotIn("Play next", playing)
+        self.assertNotIn("Play next", song_menu_actions("queue", row=2, current=1, total=8))
+        self.assertNotIn("Move to top", song_menu_actions("queue", row=0, current=3, total=8))
+        self.assertNotIn("Move to bottom", song_menu_actions("queue", row=7, current=3, total=8))
+        self.assertNotIn("Add to queue", playing)
+
+    def test_play_next_target(self):
+        self.assertEqual(play_next_target(5, 1), 2)
+        self.assertEqual(play_next_target(0, 3), 3, "a row above slots in right after the current one")
+        self.assertEqual(play_next_target(2, -1), 0)
+
+    def test_moved_index_matches_the_engine(self):
+        self.assertEqual(moved_index(2, 2, 4), 4)
+        self.assertEqual(moved_index(2, 0, 3), 1)
+        self.assertEqual(moved_index(2, 4, 1), 3)
+        self.assertEqual(moved_index(2, 3, 4), 2)
+        self.assertEqual(moved_index(2, 0, 2), 1)
+        self.assertEqual(moved_index(2, 4, 2), 3)
 
 
 class PlaylistMenuTests(unittest.TestCase):

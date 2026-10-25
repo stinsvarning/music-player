@@ -229,6 +229,127 @@ class WindowChromeTests(unittest.TestCase):
         self.assertTrue(self._key(Gdk.KEY_Delete))
         self.assertEqual(self.cmds[-1], {"cmd": "queue.remove", "index": 1})
 
+    def _queue_of(self, n, current=0):
+        from music_player.models import Track
+
+        tracks = [Track(id=f"t{i}", title=f"T{i}") for i in range(n)]
+        self.win.status.index = current
+        self.win._render_queue(tracks, current)
+        return tracks
+
+    def _row_titles(self):
+        out = []
+        row = self.win.queue_list.get_first_child()
+        while row is not None:
+            texts = []
+            stack = [row]
+            while stack:
+                w = stack.pop()
+                if isinstance(w, Gtk.Label):
+                    texts.append(w.get_text())
+                c = w.get_last_child()
+                while c is not None:
+                    stack.append(c)
+                    c = c.get_prev_sibling()
+            out.append(texts[0] if texts else "")
+            row = row.get_next_sibling()
+        return out
+
+    def _current_rows(self):
+        out, i = [], 0
+        row = self.win.queue_list.get_first_child()
+        while row is not None:
+            if row.has_css_class("current-track"):
+                out.append(i)
+            i += 1
+            row = row.get_next_sibling()
+        return out
+
+    def test_alt_down_moves_the_selected_row_and_the_selection_follows(self):
+        self._queue_of(4, current=0)
+        self.win.queue_list.select_row(self.win.queue_list.get_row_at_index(1))
+        self.cmds.clear()
+        vol = self.win.volume.get_value()
+        state = Gdk.ModifierType.ALT_MASK
+        self.assertTrue(self.win._on_key(None, Gdk.KEY_Down, 0, state))
+        self.assertEqual(self.cmds[-1], {"cmd": "queue.move", "from": 1, "to": 2})
+        self.assertEqual([t.id for t in self.win._queue], ["t0", "t2", "t1", "t3"])
+        self.assertEqual(self.win.queue_list.get_selected_row().get_index(), 2)
+        self.assertTrue(self.win._on_key(None, Gdk.KEY_Up, 0, state))
+        self.assertTrue(self.win._on_key(None, Gdk.KEY_Up, 0, state))
+        self.assertEqual(self.cmds[-1], {"cmd": "queue.move", "from": 1, "to": 0})
+        self.assertEqual([t.id for t in self.win._queue], ["t1", "t0", "t2", "t3"])
+        self.assertEqual(self.win.queue_list.get_selected_row().get_index(), 0)
+        self.assertEqual(self._current_rows(), [1], "the playing marker follows the playing row")
+        self.assertEqual(self.win.volume.get_value(), vol, "alt+arrows never touch the volume")
+
+    def test_alt_up_on_the_first_row_does_nothing(self):
+        self._queue_of(3)
+        self.win.queue_list.select_row(self.win.queue_list.get_row_at_index(0))
+        self.cmds.clear()
+        self.assertTrue(self.win._on_key(None, Gdk.KEY_Up, 0, Gdk.ModifierType.ALT_MASK))
+        self.assertEqual(self.cmds, [])
+
+    def test_moved_rows_are_redrawn_in_the_new_order(self):
+        self._queue_of(4, current=2)
+        self.win._move_queue_row(0, 3)
+        titles = self._row_titles()
+        self.assertTrue(titles[0].endswith("T1") and titles[3].endswith("T0"), titles)
+        self.assertTrue(titles[0].startswith("01"), "row numbers follow the new order")
+        self.assertEqual(self._current_rows(), [1])
+
+    def _menu_labels(self):
+        out = []
+        stack = [self.win._ctx_pop]
+        while stack:
+            w = stack.pop()
+            if isinstance(w, Gtk.Button) and w.get_label():
+                out.append(w.get_label())
+            c = w.get_last_child()
+            while c is not None:
+                stack.append(c)
+                c = c.get_prev_sibling()
+        return out
+
+    def _click_menu(self, label):
+        stack = [self.win._ctx_pop]
+        while stack:
+            w = stack.pop()
+            if isinstance(w, Gtk.Button) and w.get_label() == label:
+                w.emit("clicked")
+                return
+            c = w.get_last_child()
+            while c is not None:
+                stack.append(c)
+                c = c.get_prev_sibling()
+        self.fail(f"no {label} in {self._menu_labels()}")
+
+    def test_queue_menu_play_next_and_move_to_top_bottom(self):
+        tracks = self._queue_of(5, current=1)
+        row = self.win.queue_list.get_row_at_index(4)
+        self.win._popup_song_menu(row, tracks[4], "queue")
+        self.assertIn("Play next", self._menu_labels())
+        self.cmds.clear()
+        self._click_menu("Play next")
+        self.assertEqual(self.cmds[-1], {"cmd": "queue.move", "from": 4, "to": 2})
+        self.assertEqual([t.id for t in self.win._queue], ["t0", "t1", "t4", "t2", "t3"])
+        row = self.win.queue_list.get_row_at_index(3)
+        self.win._popup_song_menu(row, self.win._queue[3], "queue")
+        self._click_menu("Move to top")
+        self.assertEqual(self.cmds[-1], {"cmd": "queue.move", "from": 3, "to": 0})
+        self.assertEqual(self.win.status.index, 2)
+        row = self.win.queue_list.get_row_at_index(0)
+        self.win._popup_song_menu(row, self.win._queue[0], "queue")
+        self.assertNotIn("Move to top", self._menu_labels())
+        self._click_menu("Move to bottom")
+        self.assertEqual(self.cmds[-1], {"cmd": "queue.move", "from": 0, "to": 4})
+        self.assertEqual(self.win.queue_list.get_selected_row().get_index(), 4)
+
+    def test_key_card_lists_queue_moves(self):
+        from music_player.keys import HELP_LINES
+
+        self.assertTrue(any(line.startswith("alt+up") for line in HELP_LINES))
+
     def test_no_thumbs_down_control(self):
         self.assertFalse(hasattr(self.win, "btn_dislike"))
         icon = ROOT / "ui" / "music_player" / "icons" / "hicolor" / "scalable" / "actions" / "music-thumb-down-symbolic.svg"

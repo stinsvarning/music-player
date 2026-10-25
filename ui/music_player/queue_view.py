@@ -14,6 +14,8 @@ from .models import (
     Track,
     default_queue_playlist_name,
     format_time,
+    moved_index,
+    play_next_target,
     queue_needs_rebuild,
     song_menu_actions,
 )
@@ -29,16 +31,22 @@ class QueueViewMixin:
             return
         self._queue_cmd({"cmd": "queue.play", "index": idx})
 
-    def _render_queue(self, tracks: list[Track], index: int) -> None:
-        old_ids = [t.id for t in self._queue]
+    def _render_queue(self, tracks: list[Track], index: int, *, select_index: int | None = None) -> None:
+        old_ids = list(self._row_ids)
         new_ids = [t.id for t in tracks]
-        self._queue = tracks
+        self._queue = list(tracks)
         self.queue_empty.set_visible(not tracks)
         if not queue_needs_rebuild(old_ids, new_ids) and self.queue_list.get_first_child() is not None:
             self._mark_current_row(index)
+            if select_index is not None:
+                self._select_queue_row(select_index, focus=False)
             return
         selected = self.queue_list.get_selected_row()
         sel_idx = selected.get_index() if selected is not None else None
+        if select_index is not None:
+            sel_idx = select_index
+        had_focus = self._queue_has_focus()
+        self._row_ids = new_ids
         adj = self.queue_scroll.get_vadjustment()
         pos = adj.get_value() if adj is not None else 0.0
         self._clear(self.queue_list)
@@ -56,12 +64,54 @@ class QueueViewMixin:
             if adj is not None:
                 adj.set_value(pos)
             if sel_idx is not None:
-                keep = self.queue_list.get_row_at_index(sel_idx)
-                if keep is not None:
-                    self.queue_list.select_row(keep)
+                self._select_queue_row(sel_idx, focus=had_focus)
             return False
 
+        if sel_idx is not None:
+            self._select_queue_row(sel_idx, focus=had_focus)
         GLib.idle_add(restore)
+
+    def _queue_has_focus(self) -> bool:
+        focus = self.get_focus()
+        while focus is not None:
+            if focus is self.queue_list:
+                return True
+            focus = focus.get_parent()
+        return False
+
+    def _select_queue_row(self, index: int, *, focus: bool) -> None:
+        row = self.queue_list.get_row_at_index(index)
+        if row is None:
+            return
+        self.queue_list.select_row(row)
+        if focus:
+            row.grab_focus()
+
+    def _move_queue_row(self, src: int, dest: int) -> bool:
+        """Move one queue row (engine + an optimistic local re-render); the
+        selection follows the moved row."""
+        total = len(self._queue)
+        if not (0 <= src < total) or not (0 <= dest < total) or src == dest:
+            return False
+        self._queue_cmd({"cmd": "queue.move", "from": src, "to": dest})
+        tracks = list(self._queue)
+        item = tracks.pop(src)
+        tracks.insert(dest, item)
+        current = moved_index(self.status.index, src, dest) if self.status.index >= 0 else -1
+        self.status.index = current
+        self._render_queue(tracks, current, select_index=dest)
+        return True
+
+    def _move_selected_queue_row(self, delta: int) -> bool:
+        if self.body_stack.get_visible_child_name() != "queue":
+            return False
+        row = self.queue_list.get_selected_row()
+        if row is None:
+            return False
+        src = row.get_index()
+        dest = max(0, min(len(self._queue) - 1, src + delta))
+        self._move_queue_row(src, dest)
+        return True
 
     def _mark_current_row(self, index: int) -> None:
         row = self.queue_list.get_first_child()
@@ -105,8 +155,16 @@ class QueueViewMixin:
             self._dismiss_menu()
             fn()
 
-        for label in song_menu_actions(source):
-            if label == "Start mix":
+        idx = row.get_index() if source == "queue" else -1
+        current = self.status.index if source == "queue" else -1
+        for label in song_menu_actions(source, row=idx, current=current, total=len(self._queue)):
+            if label == "Play next" and source == "queue":
+                box.append(self._menu_button(label, lambda: run(lambda: self._move_queue_row(row.get_index(), play_next_target(row.get_index(), self.status.index)))))
+            elif label == "Move to top":
+                box.append(self._menu_button(label, lambda: run(lambda: self._move_queue_row(row.get_index(), 0))))
+            elif label == "Move to bottom":
+                box.append(self._menu_button(label, lambda: run(lambda: self._move_queue_row(row.get_index(), len(self._queue) - 1))))
+            elif label == "Start mix":
                 box.append(self._menu_button(label, lambda: run(lambda: self._start_mix(track))))
             elif label == "Play next":
                 box.append(self._menu_button(label, lambda: run(lambda: self._play_next(track))))
@@ -329,15 +387,5 @@ class QueueViewMixin:
         dest = dest_row.get_index() if dest_row is not None else len(self._queue) - 1
         if dest < 0 or dest == src:
             return True
-        self._queue_cmd({"cmd": "queue.move", "from": src, "to": dest})
-        item = self._queue.pop(src)
-        self._queue.insert(dest, item)
-        current = self.status.index
-        if current == src:
-            current = dest
-        elif src < current <= dest:
-            current -= 1
-        elif dest <= current < src:
-            current += 1
-        self._render_queue(self._queue, current)
+        self._move_queue_row(src, dest)
         return True

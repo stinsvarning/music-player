@@ -21,6 +21,7 @@ HELP_LINES = (
     "q  m       queue, library",
     "/          find",
     "delete     remove the selected queue row",
+    "alt+up dn  move the selected queue row",
     "menu       open the context menu",
     "f11        fullscreen",
     "ctrl+q     quit",
@@ -57,6 +58,9 @@ class KeysMixin:
             return True
         if keyval == Gdk.KEY_Escape:
             self.set_focus(None)
+            return True
+        if mods & Gdk.ModifierType.ALT_MASK and keyval in (Gdk.KEY_Up, Gdk.KEY_Down):
+            self._move_selected_queue_row(-1 if keyval == Gdk.KEY_Up else 1)
             return True
         if keyval in (Gdk.KEY_Delete, Gdk.KEY_KP_Delete):
             return self._delete_selected_queue_row()

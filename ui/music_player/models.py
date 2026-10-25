@@ -188,14 +188,38 @@ def default_queue_playlist_name(when: date | None = None) -> str:
     return f"Queue {day.isoformat()}"
 
 
-def song_menu_actions(source: str) -> list[str]:
-    actions = ["Start mix"]
+def song_menu_actions(source: str, *, row: int = -1, current: int = -1, total: int = 0) -> list[str]:
+    """Menu labels for a track row. Queue rows get move actions that make sense
+    for where the row sits (`row`) relative to the playing one (`current`)."""
     if source != "queue":
-        actions.extend(["Play next", "Add to queue"])
-    actions.append("Save this track…")
-    if source == "queue":
-        actions.extend(["Save entire queue…", "Remove"])
+        return ["Play next", "Add to queue", "Start mix", "Save this track…"]
+    actions = []
+    if row < 0 or (row != current and row != current + 1):
+        actions.append("Play next")
+    if row != 0:
+        actions.append("Move to top")
+    if row < 0 or row != total - 1:
+        actions.append("Move to bottom")
+    actions.extend(["Start mix", "Save this track…", "Save entire queue…", "Remove"])
     return actions
+
+
+def play_next_target(row: int, current: int) -> int:
+    """Queue index a row moves to so it plays right after the current one."""
+    if current < 0:
+        return 0
+    return current if row < current else current + 1
+
+
+def moved_index(at: int, src: int, dest: int) -> int:
+    """Where row `at` ends up after the row at `src` moves to `dest` (as the engine does)."""
+    if at == src:
+        return dest
+    if src < at <= dest:
+        return at - 1
+    if dest <= at < src:
+        return at + 1
+    return at
 
 
 def playlist_edit_id(pid: str) -> str:
