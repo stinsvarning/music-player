@@ -49,7 +49,6 @@ class PlayerWindow(
         super().__init__(application=app, title="Music")
         self.set_default_size(WINDOW_W, WINDOW_H)
         self.set_size_request(720, 540)
-        self.maximize()
         self.add_css_class("app-window")
         self.ipc = ipc
         self.status = PlayerStatus()

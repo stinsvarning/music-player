@@ -46,10 +46,6 @@ BarWidget {
     var now = Date.now()
     if (now - root.lastRaiseAt < 900) return
     root.lastRaiseAt = now
-    Quickshell.execDetached([
-      "hyprctl", "eval",
-      "local w = hl.get_window(\"class:stream.music.Player\"); if w then hl.dispatch(hl.dsp.window.set_prop({ prop = \"min_size\", value = \"20 20\", window = w })); hl.dispatch(hl.dsp.window.set_prop({ prop = \"max_size\", value = \"99999 99999\", window = w })); hl.dispatch(hl.dsp.window.float({ action = \"unset\", window = w })); hl.dispatch(hl.dsp.window.fullscreen({ action = \"set\", mode = \"maximized\", window = w })) end"
-    ])
     Quickshell.execDetached(["music-player"])
   }
 

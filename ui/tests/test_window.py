@@ -13,7 +13,7 @@ gi.require_version("Gdk", "4.0")
 from gi.repository import Gdk, GLib, Gtk
 
 from music_player.ipc import EngineIPC
-from music_player.window import WINDOW_H, PlayerWindow
+from music_player.window import WINDOW_H, WINDOW_W, PlayerWindow
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -791,9 +791,12 @@ class WindowChromeTests(unittest.TestCase):
 
 
 class CompactSizeTests(unittest.TestCase):
-    def test_hypr_rules_fill_the_monitor(self):
+    def test_hypr_rules_open_a_window_at_the_player_size(self):
         text = (ROOT / "packaging" / "hypr-window-rules.conf").read_text()
         self.assertIn("music", text)
+        self.assertIn("float = true", text)
+        self.assertIn(f"size = {{ {WINDOW_W}, {WINDOW_H} }}", text)
+        self.assertNotIn("fullscreen", text.replace("fullscreens", ""))
         self.assertNotIn("920, 720", text)
         self.assertNotIn("shade", text.lower())
 
@@ -805,9 +808,10 @@ class CompactSizeTests(unittest.TestCase):
         self.assertIn("bricks", text.lower())
         self.assertIn("Sign in with", text)
 
-    def test_bar_raise_maximizes(self):
+    def test_bar_raise_keeps_the_window_mode(self):
         text = (ROOT / "packaging" / "llurd.music" / "BarWidget.qml").read_text()
-        self.assertIn("maximized", text)
+        self.assertNotIn("maximized", text)
+        self.assertNotIn("fullscreen", text)
         self.assertNotIn("920 720", text)
 
 
